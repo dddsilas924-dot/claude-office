@@ -15,6 +15,40 @@ from typing import Any, cast
 
 from claude_office_hooks.config import STRIP_PREFIXES
 from claude_office_hooks.debug_logger import get_iso_timestamp
+from claude_office_hooks.personas import (
+    canonical_dept_id,
+    display_label,
+    profile_for,
+    short_label,
+)
+
+
+def _attach_persona(data: dict[str, Any], agent_type: str | None) -> None:
+    """Enrich *data* with Japanese persona labels for Claude Office.
+
+    When *agent_type* resolves to a known empire dept (via personas.py
+    or its alias map), we attach:
+
+    - ``display_name``: full "🔬 リサーチ事業部 リョウ" for panels/tooltips
+    - ``agent_label``: compact "🔬 リョウ" for sprite captions
+    - ``agent_emoji``: just the emoji (Claude Office may composite it)
+    - ``agent_color``: 0xRRGGBB int so the canvas can match Discord embed
+    - ``dept_id``: **canonical** dept_id (not the raw alias) so
+      downstream consumers don't have to redo alias resolution
+
+    Unknown depts get nothing attached — the canvas falls back to
+    whatever it already renders (usually ``agent_name`` / ``agent_type``).
+    Keeps the event payload additive, never destructive.
+    """
+    canonical = canonical_dept_id(agent_type) if agent_type else None
+    if canonical is None:
+        return
+    profile = profile_for(canonical)
+    data["display_name"] = display_label(canonical)
+    data["agent_label"] = short_label(canonical)
+    data["agent_emoji"] = profile.emoji
+    data["agent_color"] = profile.color
+    data["dept_id"] = canonical
 
 
 def get_project_name(raw_data: dict[str, Any], strip_prefixes: list[str] | None = None) -> str:
@@ -126,6 +160,9 @@ def _handle_pre_tool_use(
             data["task_description"] = prompt if prompt else description
             if agent_type:
                 data["agent_type"] = agent_type
+                # Attach 🔬/🎨/💼 + Japanese dept name when agent_type
+                # matches a registered empire dept (personas.py).
+                _attach_persona(data, agent_type)
         else:
             data["task_description"] = str(tool_input_raw) if tool_input_raw else ""
         # Remove raw tool_input — we've extracted what we need
@@ -192,7 +229,12 @@ def _handle_native_subagent_start(
 
     payload["event_type"] = "subagent_info"
     data["native_agent_id"] = native_agent_id
-    data["agent_type"] = raw_data.get("agent_type")
+    agent_type = raw_data.get("agent_type")
+    data["agent_type"] = agent_type
+    # Persona lookup: lets the canvas render native subagents with the
+    # same "🔬 リョウ" label as Task/Agent-invoked ones.
+    if agent_type:
+        _attach_persona(data, agent_type)
 
     agent_path = _build_agent_transcript_path(
         data.get("transcript_path") or transcript_path, native_agent_id
