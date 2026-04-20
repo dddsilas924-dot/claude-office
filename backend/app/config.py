@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     CLAUDE_PATH_HOST: str = ""
     CLAUDE_PATH_CONTAINER: str = ""
 
+    # Shared secret for the `/api/v1/external_event` endpoint. Empty
+    # disables the endpoint entirely (returns 503). The Commander Bridge
+    # signs HMAC-SHA256 of `<timestamp>.<body>` with this value.
+    # Rotation = redeploy both sides.
+    EXTERNAL_EVENT_SECRET: str = ""
+
     model_config = SettingsConfigDict(env_file=".env")
 
     def translate_path(self, path: str) -> str:
