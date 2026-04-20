@@ -17,6 +17,24 @@ import {
   resetSpawnIndex,
 } from "@/systems/queuePositions";
 import type { GameState, WebSocketMessage, Position } from "@/types";
+import { isBridgeEventPayload } from "@/types";
+
+// ============================================================================
+// BRIDGE AGENT TTL / PRUNE CADENCE
+// ============================================================================
+//
+// Bridge sprites are ephemeral — if a dept stops firing events we want the
+// sprite to fade out rather than linger. 90s TTL is roughly long enough to
+// keep an ASK_COMPLETED sprite on screen past the typical human reaction
+// window while still clearing up when a burst of Discord activity finishes.
+//
+// 10s prune cadence is a trade-off: the only cost of waiting longer is a
+// slightly stale sprite, but ticking more often burns pointless renders
+// when the bridge is idle (most of the time). Ten seconds is the coarsest
+// interval that still feels "live enough" in informal playtesting.
+
+const BRIDGE_AGENT_TTL_MS = 90_000;
+const BRIDGE_PRUNE_INTERVAL_MS = 10_000;
 
 // ============================================================================
 // TYPES
@@ -393,6 +411,32 @@ export function useWebSocketEvents({
               }),
             );
             break;
+
+          case "external_event": {
+            // Commander Bridge → Claude Office pass-through.
+            //
+            // The backend reuses the `event` wire key for this frame (see
+            // WebSocketMessage.event doc-comment in types/index.ts), but the
+            // payload shape is BridgeEventPayload, not the hook-event shape
+            // the static type reflects. `as unknown` avoids a structural
+            // cast through the mismatched interface; `isBridgeEventPayload`
+            // is the runtime contract guard that replaces the compile-time
+            // one we deliberately forfeit here.
+            const bridge = message.event as unknown;
+            if (!isBridgeEventPayload(bridge)) {
+              console.warn(
+                "[WS] external_event payload failed shape validation; dropping frame",
+              );
+              break;
+            }
+            // Scope bridge sprites to the current session so switching
+            // sessions doesn't leak old dept sprites into the new canvas.
+            if (bridge.session_id !== currentSessionIdRef.current) {
+              break;
+            }
+            useGameStore.getState().applyBridgeEvent(bridge);
+            break;
+          }
         }
       } catch (error) {
         console.error("[WS] Failed to parse message:", error);
@@ -505,6 +549,21 @@ export function useWebSocketEvents({
       }
     };
   }, [sessionId, enabled, connect]);
+
+  // Effect to prune stale Bridge agents on a periodic tick.
+  //
+  // Kept in a separate effect from the connection management above so the
+  // prune loop isn't reset every time `connect` changes (e.g. on session
+  // swap) — the TTL/prune cadence is purely time-based, not connection-
+  // based. `pruneStaleBridgeAgents` is a no-op when nothing is stale, so
+  // this is cheap to run while the canvas is idle.
+  useEffect(() => {
+    if (!enabled) return;
+    const intervalId = setInterval(() => {
+      useGameStore.getState().pruneStaleBridgeAgents(BRIDGE_AGENT_TTL_MS);
+    }, BRIDGE_PRUNE_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [enabled]);
 }
 
 // ============================================================================

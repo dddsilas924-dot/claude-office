@@ -18,6 +18,7 @@ import type {
   WhiteboardMode,
   EventDetail,
   ConversationEntry,
+  BridgeEventPayload,
 } from "@/types";
 
 // ============================================================================
@@ -93,6 +94,44 @@ export interface AgentAnimationState {
 }
 
 /**
+ * Commander Bridge sprite slice — ephemeral agents that light up when a
+ * Discord-originated event arrives on the WebSocket (`external_event`
+ * frame).
+ *
+ * Bridge sprites are intentionally **separate** from the
+ * `AgentAnimationState` map above:
+ * - They are not tied to desks, the arrival/departure queues, or the
+ *   XState state machine that drives Claude Code agent choreography.
+ * - They have no backend counterpart on `/state` — the backend broadcasts
+ *   them as pass-through events, not office state. Reconciling them into
+ *   `processBackendState` would drop them on every full-state push.
+ * - They are keyed by `dept_id` so a second event from the same Bridge
+ *   dept updates the existing sprite in place (no duplicate sprites).
+ *
+ * Freshness is managed client-side via {@code pruneStaleBridgeAgents}:
+ * if no event for a dept arrives within the TTL window, the sprite is
+ * removed. Server-side removal would force a round-trip for what's
+ * fundamentally a cosmetic concern.
+ */
+export interface BridgeAgentState {
+  deptId: string;
+  displayName: string;
+  /** 0xRRGGBB hex string from the Bridge producer (see office_client.py). */
+  agentColor: string;
+  /** Most-recent event_kind (e.g. "ASK_STARTED", "ASK_COMPLETED"). */
+  eventKind: string;
+  /** Truncated message body. `null` when the producer omitted it. */
+  message: string | null;
+  model: string | null;
+  durationS: number | null;
+  /** Producer-reported relay status (e.g. "ok", "timeout"). */
+  status: string | null;
+  metadata: Record<string, unknown> | null;
+  /** `Date.now()` of the last event for this dept — drives TTL pruning. */
+  lastEventAt: number;
+}
+
+/**
  * Compaction animation phases for the boss walking to and jumping on trash can.
  */
 export type CompactionAnimationPhase =
@@ -159,6 +198,23 @@ interface GameStore {
     queueIndex: number,
   ) => void;
   setAgentTyping: (agentId: string, typing: boolean) => void;
+
+  // ========== Bridge Agents (ephemeral Commander Bridge sprites) ==========
+  /** Keyed by dept_id — see {@link BridgeAgentState} for rationale. */
+  bridgeAgents: Map<string, BridgeAgentState>;
+
+  /** Upsert: second event for the same dept_id updates in place. */
+  applyBridgeEvent: (payload: BridgeEventPayload) => void;
+  /** Manual removal (e.g. from UI debug tools). */
+  removeBridgeAgent: (deptId: string) => void;
+  /**
+   * Drop bridge agents whose `lastEventAt` is older than `ttlMs`. `now`
+   * defaults to `Date.now()` but is injectable so tests can exercise the
+   * boundary without mocking the global clock.
+   */
+  pruneStaleBridgeAgents: (ttlMs: number, now?: number) => void;
+  /** Wipe all bridge agents (session switch / reset). */
+  clearBridgeAgents: () => void;
 
   // ========== Queue State ==========
   arrivalQueue: string[]; // Agent IDs in order
@@ -345,6 +401,9 @@ const initialBossState: BossAnimationState = {
 const initialState = {
   // Agents
   agents: new Map<string, AgentAnimationState>(),
+
+  // Bridge agents (ephemeral Commander Bridge sprites)
+  bridgeAgents: new Map<string, BridgeAgentState>(),
 
   // Queues
   arrivalQueue: [] as string[],
@@ -533,6 +592,61 @@ export const useGameStore = create<GameStore>()(
         const newAgents = new Map(state.agents);
         newAgents.set(agentId, { ...agent, isTyping });
         return { agents: newAgents };
+      }),
+
+    // ========================================================================
+    // BRIDGE AGENT ACTIONS
+    // ========================================================================
+
+    applyBridgeEvent: (payload) =>
+      set((state) => {
+        // Upsert by dept_id so repeated ASK_STARTED/ASK_COMPLETED pairs for
+        // the same dept mutate a single sprite in place rather than stacking.
+        const newBridgeAgents = new Map(state.bridgeAgents);
+        newBridgeAgents.set(payload.dept_id, {
+          deptId: payload.dept_id,
+          displayName: payload.display_name,
+          agentColor: payload.agent_color,
+          eventKind: payload.event_kind,
+          message: payload.message ?? null,
+          model: payload.model ?? null,
+          durationS: payload.duration_s ?? null,
+          status: payload.status ?? null,
+          metadata: payload.metadata ?? null,
+          lastEventAt: Date.now(),
+        });
+        return { bridgeAgents: newBridgeAgents };
+      }),
+
+    removeBridgeAgent: (deptId) =>
+      set((state) => {
+        if (!state.bridgeAgents.has(deptId)) return state;
+        const newBridgeAgents = new Map(state.bridgeAgents);
+        newBridgeAgents.delete(deptId);
+        return { bridgeAgents: newBridgeAgents };
+      }),
+
+    pruneStaleBridgeAgents: (ttlMs, now) =>
+      set((state) => {
+        const cutoff = (now ?? Date.now()) - ttlMs;
+        let changed = false;
+        const newBridgeAgents = new Map<string, BridgeAgentState>();
+        for (const [deptId, agent] of state.bridgeAgents) {
+          if (agent.lastEventAt >= cutoff) {
+            newBridgeAgents.set(deptId, agent);
+          } else {
+            changed = true;
+          }
+        }
+        // Avoid an unnecessary state swap when nothing expired — keeps the
+        // Zustand selector subscribers from re-rendering on every tick.
+        return changed ? { bridgeAgents: newBridgeAgents } : state;
+      }),
+
+    clearBridgeAgents: () =>
+      set((state) => {
+        if (state.bridgeAgents.size === 0) return state;
+        return { bridgeAgents: new Map<string, BridgeAgentState>() };
       }),
 
     // ========================================================================
@@ -1021,6 +1135,7 @@ export const useGameStore = create<GameStore>()(
       set({
         ...initialState,
         agents: new Map(),
+        bridgeAgents: new Map(),
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         whiteboardData: { ...initialWhiteboardData },
         whiteboardMode: 0,
@@ -1030,6 +1145,7 @@ export const useGameStore = create<GameStore>()(
       set({
         ...initialState,
         agents: new Map(),
+        bridgeAgents: new Map(),
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         whiteboardData: { ...initialWhiteboardData },
         whiteboardMode: 0,
@@ -1040,6 +1156,8 @@ export const useGameStore = create<GameStore>()(
       set({
         // Reset all agent/game state but preserve UI settings
         agents: new Map(),
+        // Bridge sprites are scoped to a session — new session, fresh canvas.
+        bridgeAgents: new Map(),
         arrivalQueue: [],
         departureQueue: [],
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
@@ -1169,6 +1287,7 @@ export const useGameStore = create<GameStore>()(
 // ============================================================================
 
 export const selectAgents = (state: GameStore) => state.agents;
+export const selectBridgeAgents = (state: GameStore) => state.bridgeAgents;
 export const selectBoss = (state: GameStore) => state.boss;
 export const selectArrivalQueue = (state: GameStore) => state.arrivalQueue;
 export const selectDepartureQueue = (state: GameStore) => state.departureQueue;

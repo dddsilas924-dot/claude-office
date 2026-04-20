@@ -42,6 +42,7 @@ import {
   selectContextUtilization,
   selectIsCompacting,
   selectPrintReport,
+  selectBridgeAgents,
 } from "@/stores/gameStore";
 import { useAnimationSystem } from "@/systems/animationSystem";
 import { useCompactionAnimation } from "@/systems/compactionAnimation";
@@ -64,6 +65,7 @@ import {
   PLANT_POSITION,
   BOSS_RUG_POSITION,
   TRASH_CAN_OFFSET,
+  bridgeAgentPosition,
 } from "@/constants/positions";
 import {
   AgentSprite,
@@ -135,6 +137,7 @@ export function OfficeGame(): ReactNode {
 
   // Subscribe to store state
   const agents = useGameStore(useShallow(selectAgents));
+  const bridgeAgents = useGameStore(useShallow(selectBridgeAgents));
   const boss = useGameStore(selectBoss);
   const todos = useGameStore(selectTodos);
   const debugMode = useGameStore(selectDebugMode);
@@ -146,6 +149,15 @@ export function OfficeGame(): ReactNode {
   const contextUtilization = useGameStore(selectContextUtilization);
   const isCompacting = useGameStore(selectIsCompacting);
   const printReport = useGameStore(selectPrintReport);
+
+  // Stable list of bridge agents in insertion order so PixiJS keys stay
+  // consistent frame-to-frame. Insertion order = the order the Map was
+  // populated by applyBridgeEvent; see BRIDGE_ROW_* in constants/positions.ts
+  // for the row-layout contract this feeds.
+  const bridgeAgentList = useMemo(
+    () => Array.from(bridgeAgents.values()),
+    [bridgeAgents],
+  );
 
   // Compaction animation state
   const compactionAnimation = useCompactionAnimation();
@@ -540,6 +552,45 @@ export function OfficeGame(): ReactNode {
                       }}
                     />
                   )}
+
+                  {/*
+                    Bridge Agent Row — ephemeral sprites for Commander Bridge
+                    events.
+
+                    Rendered in a dedicated container above the desk region so
+                    they don't participate in the agents' y-sort (their
+                    `dept_id`-keyed lifecycle is independent of the XState
+                    agent choreography). `renderBubble` and `renderLabel` are
+                    enabled so the sprite carries its own bubble + name tag —
+                    the dedicated AgentLabel/Bubble top layers below are
+                    scoped to the regular `agents` map on purpose.
+                   */}
+                  {bridgeAgentList.map((bridge, index) => {
+                    const pos = bridgeAgentPosition(index);
+                    const bubbleContent = bridge.message
+                      ? {
+                          type: "thought" as const,
+                          text: bridge.message.slice(0, 120),
+                        }
+                      : null;
+                    return (
+                      <AgentSprite
+                        key={`bridge-${bridge.deptId}`}
+                        id={`bridge-${bridge.deptId}`}
+                        name={bridge.displayName}
+                        color={bridge.agentColor}
+                        number={0}
+                        position={pos}
+                        phase="idle"
+                        bubble={bubbleContent}
+                        headsetTexture={textures.headset}
+                        sunglassesTexture={textures.sunglasses}
+                        renderBubble={true}
+                        renderLabel={true}
+                        isTyping={bridge.eventKind === "ASK_STARTED"}
+                      />
+                    );
+                  })}
 
                   {/* Labels Layer - rendered on top of most things */}
                   {Array.from(agents.values())
