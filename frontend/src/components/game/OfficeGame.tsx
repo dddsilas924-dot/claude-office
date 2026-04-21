@@ -54,14 +54,7 @@ import {
   BACKGROUND_COLOR,
 } from "@/constants/canvas";
 import {
-  EMPLOYEE_OF_MONTH_POSITION,
-  CITY_WINDOW_POSITION,
-  SAFETY_SIGN_POSITION,
-  WALL_CLOCK_POSITION,
-  WALL_OUTLET_POSITION,
   WHITEBOARD_POSITION,
-  WATER_COOLER_POSITION,
-  COFFEE_MACHINE_POSITION,
   PRINTER_STATION_POSITION,
   PLANT_POSITION,
   BOSS_RUG_POSITION,
@@ -78,12 +71,13 @@ import {
 import { BossSprite, BossBubble, MobileBoss } from "./BossSprite";
 import { isInElevatorZone } from "@/systems/queuePositions";
 import { TrashCanSprite } from "./TrashCanSprite";
-import { WallClock } from "./WallClock";
 import { Whiteboard } from "./Whiteboard";
-import { SafetySign } from "./SafetySign";
-import { CityWindow } from "./CityWindow";
-import { EmployeeOfTheMonth } from "./EmployeeOfTheMonth";
 import { Elevator, isAgentInElevator } from "./Elevator";
+// Space station wall components
+import { TitleBanner } from "./TitleBanner";
+import { MainScreen } from "./MainScreen";
+import { BlastDoor } from "./BlastDoor";
+import { CrewPanel } from "./CrewPanel";
 import { PrinterStation } from "./PrinterStation";
 import { DebugOverlays } from "./DebugOverlays";
 import {
@@ -336,77 +330,21 @@ export function OfficeGame(): ReactNode {
                   {/* Floor and walls */}
                   <OfficeBackground floorTileTexture={textures.floorTile} />
 
-                  {/* Boss area rug - rendered right after floor */}
-                  {textures.bossRug && (
-                    <pixiSprite
-                      texture={textures.bossRug}
-                      anchor={0.5}
-                      x={BOSS_RUG_POSITION.x}
-                      y={BOSS_RUG_POSITION.y}
-                      scale={0.3}
-                    />
-                  )}
+                  {/* Boss area rug - hidden in space station theme */}
 
-                  {/* Wall decorations */}
-                  <pixiContainer
-                    x={EMPLOYEE_OF_MONTH_POSITION.x}
-                    y={EMPLOYEE_OF_MONTH_POSITION.y}
-                  >
-                    <EmployeeOfTheMonth />
-                  </pixiContainer>
-                  <pixiContainer
-                    x={CITY_WINDOW_POSITION.x}
-                    y={CITY_WINDOW_POSITION.y}
-                  >
-                    <CityWindow />
-                  </pixiContainer>
-                  <pixiContainer
-                    x={SAFETY_SIGN_POSITION.x}
-                    y={SAFETY_SIGN_POSITION.y}
-                  >
-                    <SafetySign />
-                  </pixiContainer>
-                  <pixiContainer
-                    x={WALL_CLOCK_POSITION.x}
-                    y={WALL_CLOCK_POSITION.y}
-                  >
-                    <WallClock />
-                  </pixiContainer>
-                  {/* Wall outlet below clock */}
-                  {textures.wallOutlet && (
-                    <pixiSprite
-                      texture={textures.wallOutlet}
-                      anchor={0.5}
-                      x={WALL_OUTLET_POSITION.x}
-                      y={WALL_OUTLET_POSITION.y}
-                      scale={0.04}
-                    />
-                  )}
+                  {/* ── Space Station Wall Elements ─────────── */}
+                  <TitleBanner />
+                  <BlastDoor />
+                  <MainScreen />
+                  <CrewPanel />
+
+                  {/* Whiteboard (kept) */}
                   <pixiContainer
                     x={WHITEBOARD_POSITION.x}
                     y={WHITEBOARD_POSITION.y}
                   >
                     <Whiteboard todos={todos} />
                   </pixiContainer>
-                  {textures.waterCooler && (
-                    <pixiSprite
-                      texture={textures.waterCooler}
-                      anchor={0.5}
-                      x={WATER_COOLER_POSITION.x}
-                      y={WATER_COOLER_POSITION.y}
-                      scale={0.198}
-                    />
-                  )}
-                  {/* Coffee machine - to the right of water cooler */}
-                  {textures.coffeeMachine && (
-                    <pixiSprite
-                      texture={textures.coffeeMachine}
-                      anchor={0.5}
-                      x={COFFEE_MACHINE_POSITION.x}
-                      y={COFFEE_MACHINE_POSITION.y}
-                      scale={0.1}
-                    />
-                  )}
 
                   {/* Printer station - bottom left corner */}
                   {/* Only print after boss delivers the completion message */}

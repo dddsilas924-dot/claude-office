@@ -2,10 +2,6 @@
 
 import {
   Activity,
-  Play,
-  RefreshCw,
-  Bug,
-  Trash2,
   HelpCircle,
   Settings,
 } from "lucide-react";
@@ -17,12 +13,12 @@ import { useTranslation } from "@/hooks/useTranslation";
 
 interface HeaderControlsProps {
   isConnected: boolean;
-  debugMode: boolean;
+  debugMode?: boolean;
   aiSummaryEnabled: boolean | null;
-  onSimulate: () => Promise<void>;
-  onReset: () => void;
-  onClearDB: () => void;
-  onToggleDebug: () => void;
+  onSimulate?: () => Promise<void>;
+  onReset?: () => void;
+  onClearDB?: () => void;
+  onToggleDebug?: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
 }
@@ -32,61 +28,20 @@ interface HeaderControlsProps {
 // ============================================================================
 
 /**
- * Desktop-only header controls: action buttons (Simulate, Reset, Clear DB,
- * Debug, Settings, Help) and the connection/AI status display.
+ * Desktop-only header controls: Settings, Help, and connection/AI status.
  *
+ * Dev-only buttons (Simulate, Reset, Clear DB, Debug) are hidden by default.
  * Hidden on mobile — the MobileDrawer handles those actions instead.
  */
 export function HeaderControls({
   isConnected,
-  debugMode,
   aiSummaryEnabled,
-  onSimulate,
-  onReset,
-  onClearDB,
-  onToggleDebug,
   onOpenSettings,
   onOpenHelp,
 }: HeaderControlsProps): React.ReactNode {
   const { t } = useTranslation();
   return (
     <div className="flex gap-4 items-center">
-      <button
-        onClick={onSimulate}
-        className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded text-xs font-bold transition-colors"
-      >
-        <Play size={14} fill="currentColor" />
-        {t("header.simulate")}
-      </button>
-
-      <button
-        onClick={onReset}
-        className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/30 rounded text-xs font-bold transition-colors"
-      >
-        <RefreshCw size={14} />
-        {t("header.reset")}
-      </button>
-
-      <button
-        onClick={onClearDB}
-        className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/30 rounded text-xs font-bold transition-colors"
-      >
-        <Trash2 size={14} />
-        {t("header.clearDb")}
-      </button>
-
-      <button
-        onClick={onToggleDebug}
-        className={`flex items-center gap-2 px-3 py-1.5 border rounded text-xs font-bold transition-colors ${
-          debugMode
-            ? "bg-green-500/20 text-green-400 border-green-500/30"
-            : "bg-slate-500/10 text-slate-400 border-slate-500/30 hover:bg-slate-500/20"
-        }`}
-      >
-        <Bug size={14} />
-        {debugMode ? t("header.debugOn") : t("header.debugOff")}
-      </button>
-
       <button
         onClick={onOpenSettings}
         className="flex items-center gap-2 px-3 py-1.5 bg-slate-500/10 hover:bg-slate-500/20 text-slate-400 border border-slate-500/30 rounded text-xs font-bold transition-colors"
