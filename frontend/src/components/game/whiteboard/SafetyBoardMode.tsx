@@ -58,7 +58,7 @@ export function SafetyBoardMode({ data }: SafetyBoardModeProps): ReactNode {
         style={{
           fontFamily: '"Courier New", monospace',
           fontSize: 10,
-          fill: "#374151",
+          fill: "#9cb0c8",
         }}
         resolution={2}
       />
@@ -72,7 +72,7 @@ export function SafetyBoardMode({ data }: SafetyBoardModeProps): ReactNode {
         style={{
           fontFamily: '"Courier New", monospace',
           fontSize: 9,
-          fill: "#6b7280",
+          fill: "#8899aa",
         }}
         resolution={2}
       />

@@ -77,7 +77,7 @@ export function StonksMode({ data }: StonksModeProps): ReactNode {
               fontFamily: '"Courier New", monospace',
               fontSize: 12,
               fontWeight: "bold",
-              fill: "#1f2937",
+              fill: "#c8d6e5",
             }}
             resolution={2}
           />

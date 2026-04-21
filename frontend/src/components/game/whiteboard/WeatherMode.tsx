@@ -34,7 +34,7 @@ function getWeatherCondition(data: WhiteboardData): WeatherCondition {
     return { icon: "🌧️", label: "RAINY", color: "#3b82f6" };
   }
   if (activityLevel < 0.3) {
-    return { icon: "⛅", label: "CLOUDY", color: "#6b7280" };
+    return { icon: "⛅", label: "CLOUDY", color: "#8899aa" };
   }
   return { icon: "☀️", label: "SUNNY", color: "#f59e0b" };
 }
@@ -110,7 +110,7 @@ export function WeatherMode({ data }: WeatherModeProps): ReactNode {
           style={{
             fontFamily: '"Courier New", monospace',
             fontSize: 10,
-            fill: "#6b7280",
+            fill: "#8899aa",
           }}
           resolution={2}
         />

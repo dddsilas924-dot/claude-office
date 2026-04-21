@@ -67,7 +67,7 @@ export function RemoteWorkersMode({ data }: RemoteWorkersModeProps): ReactNode {
             style={{
               fontFamily: '"Courier New", monospace',
               fontSize: 24,
-              fill: "#6b7280",
+              fill: "#8899aa",
             }}
             resolution={2}
           />
@@ -162,7 +162,7 @@ export function RemoteWorkersMode({ data }: RemoteWorkersModeProps): ReactNode {
           style={{
             fontFamily: '"Courier New", monospace',
             fontSize: 9,
-            fill: "#6b7280",
+            fill: "#8899aa",
           }}
           resolution={2}
         />

@@ -23,6 +23,7 @@ import { Graphics } from "pixi.js";
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import type { TodoItem, WhiteboardMode, Agent } from "@/types";
 import { useGameStore } from "@/stores/gameStore";
+import { GOLD, BLUE } from "@/constants/spaceTheme";
 import { TodoListMode } from "./whiteboard/TodoListMode";
 import { RemoteWorkersMode } from "./whiteboard/RemoteWorkersMode";
 import { ToolPizzaMode } from "./whiteboard/ToolPizzaMode";
@@ -54,36 +55,41 @@ function WhiteboardFrame({
   const drawWhiteboard = useCallback((g: Graphics) => {
     g.clear();
 
-    // Board shadow
-    g.roundRect(4, 4, 330, 205, 8);
-    g.fill({ color: 0x000000, alpha: 0.2 });
+    // Board shadow (subtle glow)
+    g.roundRect(3, 3, 334, 209, 6);
+    g.fill({ color: BLUE, alpha: 0.06 });
 
-    // Board background
-    g.roundRect(0, 0, 330, 205, 8);
-    g.fill(0xffffff);
-    g.stroke({ width: 4, color: 0x5d4037 });
+    // Board background — dark metal panel
+    g.roundRect(0, 0, 330, 205, 5);
+    g.fill({ color: 0x081420, alpha: 1 });
+    g.stroke({ width: 2, color: GOLD, alpha: 0.35 });
 
-    // Inner border (silver frame effect)
-    g.roundRect(6, 6, 318, 193, 4);
-    g.stroke({ width: 2, color: 0x9e9e9e });
+    // Inner border (blue accent)
+    g.roundRect(4, 4, 322, 197, 3);
+    g.stroke({ width: 1, color: BLUE, alpha: 0.2 });
 
-    // Header bar
-    g.rect(10, 10, 310, 24);
-    g.fill(0x2d3748);
-    g.roundRect(10, 10, 310, 24, 3);
-    g.fill(0x2d3748);
+    // Header bar — darker panel
+    g.roundRect(8, 8, 314, 24, 3);
+    g.fill({ color: 0x0c1e30, alpha: 1 });
+    g.stroke({ width: 0.5, color: GOLD, alpha: 0.2 });
 
-    // Marker tray
-    g.rect(115, 203, 100, 8);
-    g.fill(0x9e9e9e);
-    g.stroke({ width: 1, color: 0x757575 });
+    // Gold trim strip below header
+    g.rect(8, 32, 314, 1.5);
+    g.fill({ color: GOLD, alpha: 0.3 });
 
-    // Markers
-    const markerColors = [0xef4444, 0x22c55e, 0x3b82f6];
-    markerColors.forEach((color, i) => {
-      g.roundRect(125 + i * 25, 197, 18, 12, 2);
-      g.fill(color);
-    });
+    // Corner bolts (decorative, matching airlock style)
+    const boltPositions: [number, number][] = [
+      [8, 8], [322, 8], [8, 197], [322, 197],
+    ];
+    for (const [bx, by] of boltPositions) {
+      g.circle(bx, by, 2.5);
+      g.fill({ color: 0x1a3050, alpha: 1 });
+      g.stroke({ width: 0.8, color: GOLD, alpha: 0.5 });
+    }
+
+    // Bottom edge trim
+    g.rect(8, 200, 314, 1.5);
+    g.fill({ color: BLUE, alpha: 0.2 });
   }, []);
 
   const modeInfo = MODE_INFO[mode];
@@ -101,7 +107,7 @@ function WhiteboardFrame({
             fontFamily: '"Courier New", monospace',
             fontSize: 24,
             fontWeight: "bold",
-            fill: "#ffffff",
+            fill: "#f1c40f",
           }}
           resolution={2}
         />
@@ -116,7 +122,7 @@ function WhiteboardFrame({
             draw={(g: Graphics) => {
               g.clear();
               g.circle(0, 0, i === mode ? 4 : 2);
-              g.fill(i === mode ? 0x3b82f6 : 0x9ca3af);
+              g.fill(i === mode ? BLUE : { color: GOLD, alpha: 0.3 });
             }}
           />
         ))}

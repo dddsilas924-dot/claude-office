@@ -47,7 +47,7 @@ const RADAR_R = 60; // outer radius
 
 /** Log section */
 const LOG_X = 152; // left edge offset from SCREEN_X
-const LOG_W = 418;
+const LOG_W = 280;
 const LOG_H = SCREEN_H - PAD * 2;
 
 /** Metrics section */

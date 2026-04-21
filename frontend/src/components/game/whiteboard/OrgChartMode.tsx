@@ -37,8 +37,8 @@ export function OrgChartMode({
 
       // Boss box
       g.roundRect(125, 5, 80, 35, 4);
-      g.fill(0xfef3c7);
-      g.stroke({ width: 2, color: 0xf59e0b });
+      g.fill({ color: 0x0c1e30, alpha: 1 });
+      g.stroke({ width: 2, color: 0xf1c40f });
 
       // Lines to agents
       if (agents.length > 0) {
@@ -79,7 +79,7 @@ export function OrgChartMode({
           fontFamily: '"Courier New", monospace',
           fontSize: 10,
           fontWeight: "bold",
-          fill: "#92400e",
+          fill: "#f1c40f",
         }}
         resolution={2}
       />
@@ -91,7 +91,7 @@ export function OrgChartMode({
         style={{
           fontFamily: '"Courier New", monospace',
           fontSize: 8,
-          fill: "#b45309",
+          fill: "#d4a60a",
         }}
         resolution={2}
       />
@@ -111,7 +111,7 @@ export function OrgChartMode({
                 draw={(g: Graphics) => {
                   g.clear();
                   g.roundRect(-boxWidth / 2, 0, boxWidth, 40, 3);
-                  g.fill(0xffffff);
+                  g.fill({ color: 0x0a1828, alpha: 1 });
                   g.stroke({
                     width: 2,
                     color: parseInt(agent.color.replace("#", "0x")),
@@ -137,7 +137,7 @@ export function OrgChartMode({
                 style={{
                   fontFamily: '"Courier New", monospace',
                   fontSize: 7,
-                  fill: "#6b7280",
+                  fill: "#8899aa",
                 }}
                 resolution={2}
               />

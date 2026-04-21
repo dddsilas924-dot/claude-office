@@ -32,7 +32,7 @@ export function CoffeeMode({ data }: CoffeeModeProps): ReactNode {
           fontFamily: '"Courier New", monospace',
           fontSize: 11,
           fontWeight: "bold",
-          fill: "#78350f",
+          fill: "#f1c40f",
         }}
         resolution={2}
       />
@@ -47,7 +47,7 @@ export function CoffeeMode({ data }: CoffeeModeProps): ReactNode {
           fontFamily: '"Courier New", monospace',
           fontSize: 30,
           fontWeight: "bold",
-          fill: "#92400e",
+          fill: "#fbbf24",
         }}
         resolution={2}
       />
@@ -60,7 +60,7 @@ export function CoffeeMode({ data }: CoffeeModeProps): ReactNode {
         style={{
           fontFamily: '"Courier New", monospace',
           fontSize: 9,
-          fill: "#a16207",
+          fill: "#d4a60a",
         }}
         resolution={2}
       />
@@ -85,7 +85,7 @@ export function CoffeeMode({ data }: CoffeeModeProps): ReactNode {
             style={{
               fontFamily: '"Courier New", monospace',
               fontSize: 10,
-              fill: "#a16207",
+              fill: "#d4a60a",
             }}
             resolution={2}
           />

@@ -108,7 +108,7 @@ export const PLATE_GAP_Y = 86;
 
 export const BANNER_X = 230;
 export const BANNER_Y = 4;
-export const BANNER_W = 810;
+export const BANNER_W = 600;
 export const BANNER_H = 48;
 
 // ============================================================================
@@ -117,7 +117,7 @@ export const BANNER_H = 48;
 
 export const SCREEN_X = 230;
 export const SCREEN_Y = 56;
-export const SCREEN_W = 810;
+export const SCREEN_W = 600;
 export const SCREEN_H = 180;
 
 // ============================================================================

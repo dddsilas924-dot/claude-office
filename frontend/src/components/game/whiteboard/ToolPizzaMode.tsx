@@ -97,7 +97,7 @@ export function ToolPizzaMode({ toolUsage }: ToolPizzaModeProps): ReactNode {
               style={{
                 fontFamily: '"Courier New", monospace',
                 fontSize: 10,
-                fill: "#374151",
+                fill: "#9cb0c8",
               }}
               resolution={2}
             />

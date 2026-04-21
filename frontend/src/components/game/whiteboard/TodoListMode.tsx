@@ -33,9 +33,9 @@ function getStatusColor(status: string): string {
     case "completed":
       return "#22c55e";
     case "in_progress":
-      return "#3b82f6";
+      return "#4a9eff";
     default:
-      return "#4b5563";
+      return "#6b8099";
   }
 }
 
@@ -119,7 +119,7 @@ export function TodoListMode({ todos }: TodoListModeProps): ReactNode {
             style={{
               fontFamily: '"Courier New", monospace',
               fontSize: 11,
-              fill: todo.status === "completed" ? "#6b7280" : "#1f2937",
+              fill: todo.status === "completed" ? "#5a7090" : "#c8d6e5",
               fontWeight: todo.status === "in_progress" ? "bold" : "normal",
             }}
             resolution={2}

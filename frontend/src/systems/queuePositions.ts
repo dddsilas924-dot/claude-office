@@ -23,24 +23,23 @@ export const BOSS_SLOT_RIGHT: Position = { x: 760, y: 868 }; // Receiving work (
 // For desk center at y=960 (grid-aligned 30*32), boss is at y=900
 export const BOSS_POSITION: Position = { x: 640, y: 900 };
 
-// Elevator position (DO NOT CHANGE - this is the elevator's fixed location)
-export const ELEVATOR_POSITION: Position = { x: 86, y: 178 };
+// Airlock position — left side of floor, below the wall (avoids blast door overlap)
+export const ELEVATOR_POSITION: Position = { x: 86, y: 330 };
 
-// Pathfinding target for agents walking to elevator (can be adjusted independently)
-export const ELEVATOR_PATHFINDING_TARGET: Position = { x: 86, y: 192 };
+// Pathfinding target for agents walking to airlock
+export const ELEVATOR_PATHFINDING_TARGET: Position = { x: 86, y: 344 };
 
-// Position where departing agents stand inside elevator (after arriving)
-export const ELEVATOR_DEPARTURE_POSITION: Position = { x: 86, y: 200 };
+// Position where departing agents stand inside airlock (after arriving)
+export const ELEVATOR_DEPARTURE_POSITION: Position = { x: 86, y: 352 };
 
-// Elevator spawn positions (2x3 grid inside elevator)
-// Elevator interior: ~112x144px centered at x:86
+// Airlock spawn positions (2x3 grid)
 export const ELEVATOR_SPAWN_POSITIONS: Position[] = [
-  { x: 56, y: 190 }, // Top left
-  { x: 116, y: 190 }, // Top right
-  { x: 56, y: 240 }, // Middle left
-  { x: 116, y: 240 }, // Middle right
-  { x: 56, y: 290 }, // Bottom left
-  { x: 116, y: 290 }, // Bottom right
+  { x: 56, y: 342 }, // Top left
+  { x: 116, y: 342 }, // Top right
+  { x: 56, y: 392 }, // Middle left
+  { x: 116, y: 392 }, // Middle right
+  { x: 56, y: 442 }, // Bottom left
+  { x: 116, y: 442 }, // Bottom right
 ];
 
 // Track available spawn slots (rotates through positions)

@@ -91,7 +91,7 @@ export function NewsTickerMode({ data }: NewsTickerModeProps): ReactNode {
         style={{
           fontFamily: '"Courier New", monospace',
           fontSize: 11,
-          fill: CATEGORY_COLORS[currentNews.category] ?? "#374151",
+          fill: CATEGORY_COLORS[currentNews.category] ?? "#9cb0c8",
         }}
         resolution={2}
       />

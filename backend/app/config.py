@@ -4,6 +4,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_DIR = Path(__file__).parent.parent.resolve()
+_PROJECT_ROOT = _BACKEND_DIR.parent
 _DEFAULT_DB_PATH = _BACKEND_DIR / "visualizer.db"
 
 
@@ -37,7 +38,9 @@ class Settings(BaseSettings):
     # Rotation = redeploy both sides.
     EXTERNAL_EVENT_SECRET: str = ""
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(
+        env_file=[str(_PROJECT_ROOT / ".env"), ".env"],
+    )
 
     def translate_path(self, path: str) -> str:
         """Translate host path to container path for Docker deployments.
