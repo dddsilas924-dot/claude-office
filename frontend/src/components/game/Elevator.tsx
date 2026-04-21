@@ -16,17 +16,9 @@ import type { AgentAnimationState } from "@/stores/gameStore";
 import { GOLD, BLUE, GREEN, RED } from "@/constants/spaceTheme";
 
 interface ElevatorProps {
-  /** Whether the elevator doors are open */
   isOpen: boolean;
-  /** Map of all agents to filter those inside elevator */
   agents: Map<string, AgentAnimationState>;
-  /** Elevator frame texture (ignored — procedural rendering) */
-  frameTexture: Texture | null;
-  /** Elevator door texture (ignored — procedural rendering) */
-  doorTexture: Texture | null;
-  /** Headset texture for agents */
   headsetTexture: Texture | null;
-  /** Sunglasses texture for agents */
   sunglassesTexture: Texture | null;
 }
 

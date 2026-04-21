@@ -11,21 +11,14 @@
  */
 
 import { type ReactNode, useCallback, useRef } from "react";
-import { Graphics, Texture } from "pixi.js";
+import { Graphics } from "pixi.js";
 import { useTick } from "@pixi/react";
 import { GOLD, BLUE, GREEN } from "@/constants/spaceTheme";
 
 interface PrinterStationProps {
-  /** X position of the printer station */
   x: number;
-  /** Y position of the printer station */
   y: number;
-  /** Whether a report is being printed */
   isPrinting: boolean;
-  /** Desk texture for the printer stand (unused — procedural rendering) */
-  deskTexture: Texture | null;
-  /** Printer texture (unused — procedural rendering) */
-  printerTexture: Texture | null;
 }
 
 /** No-op draw so pixiGraphics with ref satisfies the required `draw` prop. */
@@ -124,7 +117,6 @@ export function PrinterStation({
   x,
   y,
   isPrinting,
-  // deskTexture and printerTexture are intentionally unused — procedural only
 }: PrinterStationProps): ReactNode {
   const drawBase = useCallback((g: Graphics) => drawTerminalBase(g), []);
 

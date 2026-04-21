@@ -33,9 +33,7 @@ import {
 // ============================================================================
 
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
-interface OfficeBackgroundProps {
-  floorTileTexture?: unknown; // kept for API compat, ignored
-}
+interface OfficeBackgroundProps {}
 
 // ============================================================================
 // WALL DRAWING

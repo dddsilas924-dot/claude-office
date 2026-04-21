@@ -145,8 +145,6 @@ function makeMonitorDraw(deskIndex: number) {
 interface DeskSurfacesBaseProps {
   deskCount: number;
   occupiedDesks: Set<number>;
-  // Sprite texture props are intentionally ignored — consoles are procedural.
-  [key: string]: unknown;
 }
 
 /**
@@ -180,8 +178,6 @@ interface DeskSurfacesTopProps {
   deskCount: number;
   occupiedDesks: Set<number>;
   deskTasks: Map<number, string>;
-  // Sprite texture props are intentionally ignored — consoles are procedural.
-  [key: string]: unknown;
 }
 
 /**

@@ -329,7 +329,7 @@ export function OfficeGame(): ReactNode {
               {spritesLoaded && (
                 <>
                   {/* Floor and walls */}
-                  <OfficeBackground floorTileTexture={textures.floorTile} />
+                  <OfficeBackground />
 
                   {/* Boss area rug - hidden in space station theme */}
 
@@ -337,7 +337,8 @@ export function OfficeGame(): ReactNode {
                   <TitleBanner />
                   <BlastDoor />
                   <MainScreen />
-                  <CrewPanel />
+                  {/* CrewPanel hidden — whiteboard occupies this wall space */}
+                  {/* <CrewPanel /> */}
 
                   {/* Whiteboard (kept) */}
                   <pixiContainer
@@ -354,8 +355,6 @@ export function OfficeGame(): ReactNode {
                     isPrinting={
                       printReport && !isCompacting && !!boss.bubble.content
                     }
-                    deskTexture={textures.desk}
-                    printerTexture={textures.printer}
                   />
 
                   {/* Bio-pod (replaces plant in space theme) */}
@@ -365,8 +364,6 @@ export function OfficeGame(): ReactNode {
                   <Elevator
                     isOpen={isElevatorOpen}
                     agents={agents}
-                    frameTexture={textures.elevatorFrame}
-                    doorTexture={textures.elevatorDoor}
                     headsetTexture={textures.headset}
                     sunglassesTexture={textures.sunglasses}
                   />
@@ -424,8 +421,6 @@ export function OfficeGame(): ReactNode {
                   <DeskSurfacesBase
                     deskCount={deskCount}
                     occupiedDesks={occupiedDesks}
-                    deskTexture={textures.desk}
-                    keyboardTexture={textures.keyboard}
                   />
 
                   {/* Agent arms - rendered after desk/keyboard, before headsets */}
@@ -456,15 +451,6 @@ export function OfficeGame(): ReactNode {
                     deskCount={deskCount}
                     occupiedDesks={occupiedDesks}
                     deskTasks={deskTasks}
-                    monitorTexture={textures.monitor}
-                    coffeeMugTexture={textures.coffeeMug}
-                    staplerTexture={textures.stapler}
-                    deskLampTexture={textures.deskLamp}
-                    penHolderTexture={textures.penHolder}
-                    magic8BallTexture={textures.magic8Ball}
-                    rubiksCubeTexture={textures.rubiksCube}
-                    rubberDuckTexture={textures.rubberDuck}
-                    thermosTexture={textures.thermos}
                   />
 
                   {/* Boss */}
@@ -474,11 +460,7 @@ export function OfficeGame(): ReactNode {
                     bubble={boss.bubble.content}
                     inUseBy={boss.inUseBy}
                     currentTask={boss.currentTask}
-                    chairTexture={textures.chair}
-                    deskTexture={textures.desk}
                     keyboardTexture={textures.keyboard}
-                    monitorTexture={textures.monitor}
-                    phoneTexture={textures.phone}
                     headsetTexture={textures.headset}
                     sunglassesTexture={textures.sunglasses}
                     renderBubble={false}

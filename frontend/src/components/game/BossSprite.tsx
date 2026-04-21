@@ -27,16 +27,12 @@ export interface BossSpriteProps {
   bubble: BubbleContent | null;
   inUseBy: "arrival" | "departure" | null;
   currentTask: string | null;
-  chairTexture: Texture | null;
-  deskTexture: Texture | null;
   keyboardTexture: Texture | null;
-  monitorTexture: Texture | null;
-  phoneTexture: Texture | null;
   headsetTexture: Texture | null;
   sunglassesTexture: Texture | null;
-  renderBubble?: boolean; // Whether to render bubble (default true)
-  isTyping?: boolean; // Whether boss is typing (animates arms)
-  isAway?: boolean; // Whether boss is away from desk (hides body, shows only furniture)
+  renderBubble?: boolean;
+  isTyping?: boolean;
+  isAway?: boolean;
 }
 
 // ============================================================================
@@ -262,11 +258,7 @@ function BossSpriteComponent({
   bubble,
   inUseBy: _inUseBy,
   currentTask,
-  chairTexture: _chairTexture,
-  deskTexture: _deskTexture,
   keyboardTexture,
-  monitorTexture: _monitorTexture,
-  phoneTexture: _phoneTexture,
   headsetTexture,
   sunglassesTexture,
   renderBubble = true,
