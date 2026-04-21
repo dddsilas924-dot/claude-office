@@ -2,6 +2,20 @@
 
 All notable changes to Claude Office Visualizer are documented here.
 
+## [0.15.0] - 2026-04-21
+
+### Changed
+
+- **Space Station Theme**: Complete visual overhaul from office to space station command bridge. All sprite-based office furniture replaced with procedural PixiJS Graphics using dark-metal palette (navy/blue/gold/green accents).
+- **OfficeBackground**: Armor-plated walls with cable conduits, gold trim, running lights animation. Dark metal floor with blue grid lines.
+- **Wall Elements**: TitleBanner, BlastDoor, MainScreen (animated star field + HUD), CrewPanel replace old office wall decorations.
+- **DeskGrid**: Wooden office desks → procedural command consoles with holographic monitors and LED indicators.
+- **SpaceProps**: CommandChair and BioPod replace old sprite chair and plant.
+- **BossSprite**: Desk, chair, monitor, phone → procedural command furniture with blue/gold accents.
+- **PrinterStation**: Sprite printer → procedural comms terminal with scan-line screen and data transfer animation.
+- **Elevator**: Sprite elevator → procedural airlock with sliding blast doors and status light.
+- **spaceTheme.ts**: New centralized color/layout constants (GOLD, BLUE, GREEN, wall/floor dimensions).
+
 ## [0.14.0] - 2026-04-06
 
 ### Added

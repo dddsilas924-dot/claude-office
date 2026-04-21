@@ -100,5 +100,8 @@ PRD.md
 .claude/.cc2cc-session-id
 *.local.*
 
+# --- Design Mockups ---
+space_station_concept*.html
+
 # --- Paid/Licensed Assets ---
 frontend/public/sprites/paid/
