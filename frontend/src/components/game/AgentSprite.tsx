@@ -72,6 +72,82 @@ function drawAgent(g: Graphics, color: string): void {
 }
 
 // ============================================================================
+// NAME LABEL (with dept glyph split-off)
+// ============================================================================
+
+/**
+ * Regex that peels a leading Extended_Pictographic glyph (optionally part
+ * of a ZWJ sequence, optionally tailed by VS16) plus any trailing space(s).
+ *
+ * We treat Bridge-produced names like "🏠 不動産事業部 アイリ" by pulling
+ * the 🏠 out so it can render as a large badge above the capsule while
+ * the Japanese division + character text stays as the compact label.
+ */
+const LEADING_EMOJI_RE =
+  /^(\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*\uFE0F?)\s*/u;
+
+/**
+ * Font stack tuned for Pixi.js text rendering: emoji color fonts first for
+ * the glyph badge, then a Japanese-aware serif/sans fallback for the label
+ * so CJK glyphs don't degrade to tofu on older Chrome/Pixi combos.
+ */
+const EMOJI_FONT_FAMILY =
+  '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+const LABEL_FONT_FAMILY =
+  '"Hiragino Kaku Gothic ProN", "ヒラギノ角ゴ ProN", "BIZ UDPGothic", "Yu Gothic", "Meiryo", "Helvetica Neue", Arial, sans-serif';
+
+interface AgentNameLabelProps {
+  name: string;
+}
+
+/**
+ * Renders the sprite's name tag. Splits an optional leading pictographic
+ * glyph into a big floating badge at y=-104 and draws the remaining text
+ * at y=-70 so the two layers never overlap. The regex match is cheap and
+ * React Compiler caches pure sub-computations, so no manual useMemo.
+ */
+function AgentNameLabel({ name }: AgentNameLabelProps): ReactNode {
+  const match = name.match(LEADING_EMOJI_RE);
+  const emoji = match ? match[1] : null;
+  const label = match ? name.slice(match[0].length) : name;
+
+  return (
+    <>
+      {emoji && (
+        <pixiContainer y={-104} scale={0.5}>
+          <pixiText
+            text={emoji}
+            anchor={0.5}
+            style={{
+              fontFamily: EMOJI_FONT_FAMILY,
+              fontSize: 44,
+              fill: 0xffffff,
+            }}
+            resolution={2}
+          />
+        </pixiContainer>
+      )}
+      {label && (
+        <pixiContainer y={-70} scale={0.5}>
+          <pixiText
+            text={label}
+            anchor={0.5}
+            style={{
+              fontFamily: LABEL_FONT_FAMILY,
+              fontSize: 22,
+              fill: 0xffffff,
+              fontWeight: "bold",
+              stroke: { width: 4, color: 0x000000 },
+            }}
+            resolution={2}
+          />
+        </pixiContainer>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
 // BUBBLE COMPONENT
 // ============================================================================
 
@@ -99,11 +175,13 @@ function Bubble({ content, yOffset }: BubbleProps): ReactNode {
   const lines = Math.max(1, Math.ceil(text.length / capacity));
   const bHeight = 35 + lines * 14;
 
-  // Text style at 2x for sharp rendering
+  // Text style at 2x for sharp rendering. Japanese-first font stack so
+  // Bridge bubbles (えむ's message text is usually 日本語) don't hit the
+  // Courier fallback path that ships without CJK glyphs.
   const textStyle = useMemo<Partial<TextStyle>>(
     () => ({
       fontFamily:
-        '"Courier New", Courier, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", monospace',
+        '"Hiragino Kaku Gothic ProN", "ヒラギノ角ゴ ProN", "BIZ UDPGothic", "Yu Gothic", "Meiryo", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Courier New", monospace',
       fontSize: 20,
       fill: "#000000",
       fontWeight: "bold",
@@ -201,22 +279,13 @@ function AgentSpriteComponent({
         />
       )}
 
-      {/* Agent name if present - hide when in elevator or when renderLabel is false */}
+      {/* Agent name if present - hide when in elevator or when renderLabel is false.
+          Bridge sprites arrive with labels like "🏠 不動産事業部 アイリ" — we
+          split the leading pictographic so the dept glyph floats above the
+          capsule as a large badge (instant visual ID at FB-screenshot zoom)
+          and the 日本語 line below stays sized for readability on mobile. */}
       {renderLabel && name && !isInElevatorZone(position) && (
-        <pixiContainer y={-70} scale={0.5}>
-          <pixiText
-            text={name}
-            anchor={0.5}
-            style={{
-              fontFamily: "monospace",
-              fontSize: 24,
-              fill: 0xffffff,
-              fontWeight: "bold",
-              stroke: { width: 4, color: 0x000000 },
-            }}
-            resolution={2}
-          />
-        </pixiContainer>
+        <AgentNameLabel name={name} />
       )}
 
       {/* Bubble - hide when in elevator or when renderBubble is false */}
@@ -325,14 +394,17 @@ export interface AgentLabelProps {
 }
 
 function AgentLabelComponent({ name, position }: AgentLabelProps): ReactNode {
+  // Mirrors AgentNameLabel's CJK font stack so regular Claude Code agents
+  // — which sometimes carry Japanese dept names in multi-agent runs —
+  // render with the same glyph fidelity as Bridge sprites above.
   return (
     <pixiContainer x={position.x} y={position.y - 70} scale={0.5}>
       <pixiText
         text={name}
         anchor={0.5}
         style={{
-          fontFamily: "monospace",
-          fontSize: 24,
+          fontFamily: LABEL_FONT_FAMILY,
+          fontSize: 22,
           fill: 0xffffff,
           fontWeight: "bold",
           stroke: { width: 4, color: 0x000000 },

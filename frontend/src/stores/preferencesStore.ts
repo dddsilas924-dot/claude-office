@@ -35,7 +35,10 @@ const API_BASE = "http://localhost:8000/api/v1/preferences";
 const DEFAULT_CLOCK_TYPE: ClockType = "analog";
 const DEFAULT_CLOCK_FORMAT: ClockFormat = "12h";
 const DEFAULT_AUTO_FOLLOW_NEW_SESSIONS = true;
-const DEFAULT_LANGUAGE: Locale = "en";
+// えむ's primary install runs in Japanese; `ja.ts` is maintained in parity
+// with `en.ts` for every key. Operators on other installs can still flip
+// the picker in Settings, which persists to the backend preferences store.
+const DEFAULT_LANGUAGE: Locale = "ja";
 
 // ============================================================================
 // API HELPERS
