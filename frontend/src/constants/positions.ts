@@ -38,8 +38,8 @@ export const BLAST_DOOR_POSITION = { x: DOOR_X, y: DOOR_Y };
 /** Crew/clock panel (right wall, replaces safety sign + clock) */
 export const CREW_PANEL_POSITION = { x: PANEL_X, y: PANEL_Y };
 
-/** Whiteboard position (kept but repositioned slightly) */
-export const WHITEBOARD_POSITION = { x: 641, y: 11 };
+/** Whiteboard position — moved to floor (right side, above desk row 1) */
+export const WHITEBOARD_POSITION = { x: 920, y: WALL_HEIGHT + 14 };
 
 // ============================================================================
 // LEGACY POSITIONS (kept for API compat, may be unused)

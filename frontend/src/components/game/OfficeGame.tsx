@@ -79,6 +79,7 @@ import { MainScreen } from "./MainScreen";
 import { BlastDoor } from "./BlastDoor";
 import { CrewPanel } from "./CrewPanel";
 import { PrinterStation } from "./PrinterStation";
+import { CommandChair, BioPod } from "./SpaceProps";
 import { DebugOverlays } from "./DebugOverlays";
 import {
   DeskSurfacesBase,
@@ -346,8 +347,7 @@ export function OfficeGame(): ReactNode {
                     <Whiteboard todos={todos} />
                   </pixiContainer>
 
-                  {/* Printer station - bottom left corner */}
-                  {/* Only print after boss delivers the completion message */}
+                  {/* Comms terminal (replaces printer station in space theme) */}
                   <PrinterStation
                     x={PRINTER_STATION_POSITION.x}
                     y={PRINTER_STATION_POSITION.y}
@@ -358,16 +358,8 @@ export function OfficeGame(): ReactNode {
                     printerTexture={textures.printer}
                   />
 
-                  {/* Plant - to the right of printer */}
-                  {textures.plant && (
-                    <pixiSprite
-                      texture={textures.plant}
-                      anchor={0.5}
-                      x={PLANT_POSITION.x}
-                      y={PLANT_POSITION.y}
-                      scale={0.1}
-                    />
-                  )}
+                  {/* Bio-pod (replaces plant in space theme) */}
+                  <BioPod x={PLANT_POSITION.x} y={PLANT_POSITION.y} />
 
                   {/* Elevator with animated doors and agents inside */}
                   <Elevator
@@ -381,7 +373,7 @@ export function OfficeGame(): ReactNode {
 
                   {/* Y-sorted layer: chairs and agents sorted by Y position (higher Y = in front) */}
                   <pixiContainer sortableChildren={true}>
-                    {/* Desk chairs - zIndex based on chair seat back */}
+                    {/* Command chairs — procedural (space station theme) */}
                     {deskPositions.map((desk, i) => {
                       const chairZIndex = desk.y + 20;
                       return (
@@ -391,15 +383,7 @@ export function OfficeGame(): ReactNode {
                           y={desk.y}
                           zIndex={chairZIndex}
                         >
-                          {textures.chair && (
-                            <pixiSprite
-                              texture={textures.chair}
-                              anchor={0.5}
-                              x={0}
-                              y={30}
-                              scale={0.1386}
-                            />
-                          )}
+                          <CommandChair />
                         </pixiContainer>
                       );
                     })}

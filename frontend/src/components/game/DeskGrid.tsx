@@ -2,14 +2,15 @@
  * DeskGrid Components
  *
  * Renders the desk grid with:
- * - Desk surfaces and keyboards (DeskSurfacesBase - behind agent arms)
- * - Monitors and desk accessories (DeskSurfacesTop - in front of agent arms)
+ * - Procedural dark-metal command console surfaces (DeskSurfacesBase — behind agent arms)
+ * - Procedural holographic monitors + LED indicators (DeskSurfacesTop — in front of agent arms)
  * - Task marquees on occupied desks
  */
 
-import { type ReactNode, useMemo } from "react";
-import { Texture } from "pixi.js";
+import { type ReactNode, useMemo, useCallback } from "react";
+import type { Graphics } from "pixi.js";
 import { DeskMarquee } from "./DeskMarquee";
+import { GOLD, BLUE, GREEN } from "@/constants/spaceTheme";
 
 // ============================================================================
 // TYPES
@@ -21,64 +22,19 @@ export interface DeskPosition {
   isEmpty: boolean;
 }
 
-type DeskItem =
-  | "mug"
-  | "stapler"
-  | "lamp"
-  | "penholder"
-  | "8ball"
-  | "rubiks"
-  | "duck"
-  | "thermos"
-  | "none";
-
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
-// Desk grid layout
+// Desk grid layout (unchanged)
 const ROW_SIZE = 4;
 const DESK_START_X = 256;
 const DESK_START_Y = 408;
 const DESK_SPACING_X = 256;
 const DESK_SPACING_Y = 192;
 
-// Different colors for desk accessories (tinted onto grayscale sprites)
-const ACCESSORY_TINTS = [
-  0xffffff, // White (no tint) - desk 0
-  0x87ceeb, // Sky blue - desk 1
-  0x98fb98, // Pale green - desk 2
-  0xffb6c1, // Light pink - desk 3
-  0xffd700, // Gold - desk 4
-  0xdda0dd, // Plum - desk 5
-  0xf0e68c, // Khaki - desk 6
-  0xadd8e6, // Light blue - desk 7
-];
-
-// Deterministic "random" desk items - precomputed shuffled sequence
-// Avoids row patterns while ensuring good variety
-const DESK_ITEM_SEQUENCE: DeskItem[] = [
-  "lamp",
-  "mug",
-  "8ball",
-  "stapler",
-  "penholder",
-  "thermos",
-  "rubiks",
-  "duck",
-  "lamp",
-  "none",
-  "none",
-  "lamp",
-  "stapler",
-  "penholder",
-  "mug",
-  "mug",
-  "8ball",
-  "thermos",
-  "rubiks",
-  "duck",
-];
+// LED indicator colors cycling across desks
+const LED_COLORS = [GREEN, BLUE, GOLD] as const;
 
 // ============================================================================
 // HOOKS
@@ -97,8 +53,6 @@ export function useDeskPositions(
     for (let i = 0; i < deskCount; i++) {
       const row = Math.floor(i / ROW_SIZE);
       const col = i % ROW_SIZE;
-      // Grid-aligned positions: X at multiples of 32 (256, 512, 768, 1024)
-      // Y spacing of 192 (6×32) ensures desk centers align to grid
       const x = DESK_START_X + col * DESK_SPACING_X;
       const y = DESK_START_Y + row * DESK_SPACING_Y;
       const deskNum = i + 1;
@@ -112,11 +66,76 @@ export function useDeskPositions(
 }
 
 // ============================================================================
-// HELPER FUNCTIONS
+// DRAW HELPERS
 // ============================================================================
 
-function getDeskItem(index: number): DeskItem {
-  return DESK_ITEM_SEQUENCE[index % DESK_ITEM_SEQUENCE.length];
+/**
+ * Draws the dark-metal console desk surface + keyboard area.
+ */
+function drawConsoleSurface(g: Graphics): void {
+  g.clear();
+
+  // --- Desk surface: dark metal panel ---
+  const dw = 120;
+  const dh = 40;
+  const dx = -dw / 2;
+  const dy = 30;
+  const r = 4;
+
+  g.roundRect(dx, dy, dw, dh, r);
+  g.fill({ color: 0x0a1520, alpha: 0.9 });
+  g.stroke({ width: 0.5, color: BLUE, alpha: 0.3 });
+
+  // Top-edge highlight (thin line across the top)
+  g.moveTo(dx + r, dy);
+  g.lineTo(dx + dw - r, dy);
+  g.stroke({ width: 1, color: BLUE, alpha: 0.1 });
+
+  // --- Keyboard area: small recessed panel ---
+  const kw = 40;
+  const kh = 12;
+  g.roundRect(-kw / 2, 42, kw, kh, 2);
+  g.fill({ color: 0x060e1a, alpha: 1.0 });
+  g.stroke({ width: 0.5, color: BLUE, alpha: 0.2 });
+}
+
+/**
+ * Returns a draw function for the holographic monitor + LED indicators.
+ * Varies LED color by desk index.
+ */
+function makeMonitorDraw(deskIndex: number) {
+  return function drawMonitor(g: Graphics): void {
+    g.clear();
+
+    // --- Monitor frame ---
+    const mx = -70;
+    const my = 10;
+    const mw = 50;
+    const mh = 35;
+    const mr = 3;
+
+    g.roundRect(mx, my, mw, mh, mr);
+    g.fill({ color: 0x020810, alpha: 1.0 });
+    g.stroke({ width: 1, color: BLUE, alpha: 0.4 });
+
+    // Screen inner glow (slightly inset)
+    const ig = 3;
+    g.roundRect(mx + ig, my + ig, mw - ig * 2, mh - ig * 2, 2);
+    g.fill({ color: BLUE, alpha: 0.03 });
+
+    // --- LED indicator dots (3 stacked, right side of console) ---
+    const ledX = 45;
+    const ledStartY = 32;
+    const ledSpacing = 7;
+    const ledColors: readonly number[] = LED_COLORS;
+
+    for (let dot = 0; dot < 3; dot++) {
+      const color = ledColors[(deskIndex + dot) % ledColors.length];
+      const isActive = dot === 0; // first dot always "on"
+      g.circle(ledX, ledStartY + dot * ledSpacing, 2);
+      g.fill({ color, alpha: isActive ? 0.9 : 0.25 });
+    }
+  };
 }
 
 // ============================================================================
@@ -126,18 +145,16 @@ function getDeskItem(index: number): DeskItem {
 interface DeskSurfacesBaseProps {
   deskCount: number;
   occupiedDesks: Set<number>;
-  deskTexture: Texture | null;
-  keyboardTexture: Texture | null;
+  // Sprite texture props are intentionally ignored — consoles are procedural.
+  [key: string]: unknown;
 }
 
 /**
- * Renders desk surfaces and keyboards (behind agent arms).
+ * Renders procedural command-console desk surfaces (behind agent arms).
  */
 export function DeskSurfacesBase({
   deskCount,
   occupiedDesks,
-  deskTexture,
-  keyboardTexture,
 }: DeskSurfacesBaseProps): ReactNode {
   const desks = useDeskPositions(deskCount, occupiedDesks);
 
@@ -145,62 +162,35 @@ export function DeskSurfacesBase({
     <>
       {desks.map((desk, i) => (
         <pixiContainer key={i} x={desk.x} y={desk.y}>
-          {/* Desk surface */}
-          {deskTexture && (
-            <pixiSprite
-              texture={deskTexture}
-              anchor={{ x: 0.5, y: 0 }}
-              y={30}
-              scale={0.105}
-            />
-          )}
-          {/* Keyboard - front of desk surface (near chair, agent types here) */}
-          {keyboardTexture && (
-            <pixiSprite
-              texture={keyboardTexture}
-              anchor={0.5}
-              x={0}
-              y={42}
-              scale={0.04}
-            />
-          )}
+          <ConsoleBase />
         </pixiContainer>
       ))}
     </>
   );
 }
 
+/** Memoised static console-surface graphics for a single desk. */
+function ConsoleBase(): ReactNode {
+  // draw is stable — drawConsoleSurface is a module-level function reference
+  const draw = useCallback(drawConsoleSurface, []);
+  return <pixiGraphics draw={draw} />;
+}
+
 interface DeskSurfacesTopProps {
   deskCount: number;
   occupiedDesks: Set<number>;
   deskTasks: Map<number, string>;
-  monitorTexture: Texture | null;
-  coffeeMugTexture: Texture | null;
-  staplerTexture: Texture | null;
-  deskLampTexture: Texture | null;
-  penHolderTexture: Texture | null;
-  magic8BallTexture: Texture | null;
-  rubiksCubeTexture: Texture | null;
-  rubberDuckTexture: Texture | null;
-  thermosTexture: Texture | null;
+  // Sprite texture props are intentionally ignored — consoles are procedural.
+  [key: string]: unknown;
 }
 
 /**
- * Renders monitors and desk decorations (in front of agent arms).
+ * Renders procedural holographic monitors + LED indicators (in front of agent arms).
  */
 export function DeskSurfacesTop({
   deskCount,
   occupiedDesks,
   deskTasks,
-  monitorTexture,
-  coffeeMugTexture,
-  staplerTexture,
-  deskLampTexture,
-  penHolderTexture,
-  magic8BallTexture,
-  rubiksCubeTexture,
-  rubberDuckTexture,
-  thermosTexture,
 }: DeskSurfacesTopProps): ReactNode {
   const desks = useDeskPositions(deskCount, occupiedDesks);
 
@@ -208,94 +198,21 @@ export function DeskSurfacesTop({
     <>
       {desks.map((desk, i) => (
         <pixiContainer key={i} x={desk.x} y={desk.y}>
-          {/* Monitor - back of desk surface (far from chair) */}
-          {monitorTexture && (
-            <pixiSprite
-              texture={monitorTexture}
-              anchor={0.5}
-              x={-45}
-              y={27}
-              scale={0.08}
-            />
-          )}
-          {/* Desk accessory - right corner, cycles through items */}
-          {getDeskItem(i) === "mug" && coffeeMugTexture && (
-            <pixiSprite
-              texture={coffeeMugTexture}
-              anchor={0.5}
-              x={50}
-              y={40}
-              scale={0.025}
-              tint={ACCESSORY_TINTS[i % ACCESSORY_TINTS.length]}
-            />
-          )}
-          {getDeskItem(i) === "stapler" && staplerTexture && (
-            <pixiSprite
-              texture={staplerTexture}
-              anchor={0.5}
-              x={50}
-              y={43}
-              scale={0.19}
-            />
-          )}
-          {getDeskItem(i) === "lamp" && deskLampTexture && (
-            <pixiSprite
-              texture={deskLampTexture}
-              anchor={0.5}
-              x={50}
-              y={29}
-              scale={0.35}
-            />
-          )}
-          {getDeskItem(i) === "penholder" && penHolderTexture && (
-            <pixiSprite
-              texture={penHolderTexture}
-              anchor={0.5}
-              x={54}
-              y={38}
-              scale={0.22}
-            />
-          )}
-          {getDeskItem(i) === "8ball" && magic8BallTexture && (
-            <pixiSprite
-              texture={magic8BallTexture}
-              anchor={0.5}
-              x={54}
-              y={42}
-              scale={0.162}
-            />
-          )}
-          {getDeskItem(i) === "rubiks" && rubiksCubeTexture && (
-            <pixiSprite
-              texture={rubiksCubeTexture}
-              anchor={0.5}
-              x={52}
-              y={42}
-              scale={0.16}
-            />
-          )}
-          {getDeskItem(i) === "duck" && rubberDuckTexture && (
-            <pixiSprite
-              texture={rubberDuckTexture}
-              anchor={0.5}
-              x={52}
-              y={42}
-              scale={0.16}
-            />
-          )}
-          {getDeskItem(i) === "thermos" && thermosTexture && (
-            <pixiSprite
-              texture={thermosTexture}
-              anchor={0.5}
-              x={52}
-              y={40}
-              scale={0.36}
-            />
-          )}
-          {/* Task marquee on desk surface - only for occupied desks */}
+          <ConsoleTop deskIndex={i} />
+          {/* Task marquee — only visible on occupied desks */}
           <DeskMarquee text={deskTasks.get(i + 1) ?? ""} />
         </pixiContainer>
       ))}
     </>
   );
+}
+
+interface ConsoleTopProps {
+  deskIndex: number;
+}
+
+/** Memoised static monitor graphics for a single desk. */
+function ConsoleTop({ deskIndex }: ConsoleTopProps): ReactNode {
+  const draw = useCallback(makeMonitorDraw(deskIndex), [deskIndex]);
+  return <pixiGraphics draw={draw} />;
 }
