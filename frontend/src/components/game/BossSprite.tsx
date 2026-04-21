@@ -15,6 +15,7 @@ import { MarqueeText } from "./MarqueeText";
 import { ICON_MAP } from "./shared/iconMap";
 import { drawBubble, drawIconBadge } from "./shared/drawBubble";
 import { drawRightArm, drawLeftArm } from "./shared/drawArm";
+import { GOLD, BLUE, GREEN } from "@/constants/spaceTheme";
 
 // ============================================================================
 // TYPES
@@ -81,18 +82,87 @@ function drawBossBody(g: Graphics, _state: BossState): void {
   g.stroke({ width: STROKE_WIDTH, color: 0xffffff });
 }
 
-function drawFallbackChair(g: Graphics): void {
+// ============================================================================
+// PROCEDURAL SPACE-STATION FURNITURE (replaces sprite textures)
+// ============================================================================
+
+/** Boss command chair — bigger than agent chairs, gold accent ring */
+function drawCommandChair(g: Graphics): void {
   g.clear();
-  g.circle(0, 15, 25);
-  g.fill(0x4a5568);
-  g.stroke({ width: 2, color: 0x2d3748 });
+  // Seat cushion base
+  g.roundRect(-22, 0, 44, 30, 8);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 2, color: BLUE, alpha: 0.5 });
+  // Gold trim ring
+  g.roundRect(-20, 1, 40, 4, 2);
+  g.fill({ color: GOLD, alpha: 0.7 });
+  // Back rest
+  g.roundRect(-18, -22, 36, 24, 6);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 2, color: BLUE, alpha: 0.4 });
+  // Gold crown on backrest top
+  g.roundRect(-16, -25, 32, 5, 3);
+  g.fill({ color: GOLD, alpha: 0.6 });
 }
 
-function drawFallbackDesk(g: Graphics): void {
+/** Boss command desk — wider than agent desks, dark metal with blue border glow */
+function drawCommandDesk(g: Graphics): void {
   g.clear();
-  g.rect(-70, 15, 140, 80);
-  g.fill(0x5d3a1e);
-  g.stroke({ width: 4, color: 0x3d2a1e });
+  // Desk surface (wider/more impressive than agent desk)
+  g.roundRect(-75, 0, 150, 70, 8);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 2, color: BLUE, alpha: 0.3 });
+  // Blue edge glow strip along top of desk
+  g.roundRect(-74, 1, 148, 4, 4);
+  g.fill({ color: BLUE, alpha: 0.2 });
+  // Gold accent line
+  g.roundRect(-60, 6, 120, 2, 1);
+  g.fill({ color: GOLD, alpha: 0.4 });
+}
+
+/** Boss holographic monitor — screen with blue border and inner glow */
+function drawHoloMonitor(g: Graphics): void {
+  g.clear();
+  // Stand
+  g.rect(-3, 16, 6, 14);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  // Stand base
+  g.roundRect(-9, 28, 18, 5, 2);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 1, color: BLUE, alpha: 0.3 });
+  // Screen bezel
+  g.roundRect(-22, -14, 44, 32, 4);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 2, color: BLUE, alpha: 0.8 });
+  // Screen inner glow
+  g.roundRect(-19, -11, 38, 26, 3);
+  g.fill({ color: 0x020810, alpha: 1 });
+  // Scanline suggestion
+  g.roundRect(-17, -8, 34, 2, 1);
+  g.fill({ color: GREEN, alpha: 0.15 });
+  g.roundRect(-17, -3, 34, 2, 1);
+  g.fill({ color: GREEN, alpha: 0.1 });
+  g.roundRect(-17, 2, 34, 2, 1);
+  g.fill({ color: BLUE, alpha: 0.12 });
+}
+
+/** Boss comms device (replaces phone) — small panel with gold LED */
+function drawCommsDevice(g: Graphics): void {
+  g.clear();
+  // Body
+  g.roundRect(-10, -7, 20, 14, 3);
+  g.fill({ color: 0x0a1520, alpha: 1 });
+  g.stroke({ width: 1, color: BLUE, alpha: 0.5 });
+  // Gold LED indicator
+  g.circle(-5, -2, 2);
+  g.fill({ color: GOLD, alpha: 0.9 });
+  // Green status dot
+  g.circle(2, -2, 2);
+  g.fill({ color: GREEN, alpha: 0.8 });
+  // Speaker grille lines
+  g.moveTo(-7, 4);
+  g.lineTo(7, 4);
+  g.stroke({ width: 1, color: BLUE, alpha: 0.3 });
 }
 
 // ============================================================================
@@ -192,10 +262,10 @@ function BossSpriteComponent({
   bubble,
   inUseBy: _inUseBy,
   currentTask,
-  chairTexture,
-  deskTexture,
+  chairTexture: _chairTexture,
+  deskTexture: _deskTexture,
   keyboardTexture,
-  monitorTexture,
+  monitorTexture: _monitorTexture,
   phoneTexture: _phoneTexture,
   headsetTexture,
   sunglassesTexture,
@@ -252,22 +322,30 @@ function BossSpriteComponent({
     [bossArmParams, leftArmOffset],
   );
 
+  // Static draw callbacks for procedural furniture (stable references)
+  const drawChairCallback = useCallback(
+    (g: Graphics) => drawCommandChair(g),
+    [],
+  );
+  const drawDeskCallback = useCallback(
+    (g: Graphics) => drawCommandDesk(g),
+    [],
+  );
+  const drawMonitorCallback = useCallback(
+    (g: Graphics) => drawHoloMonitor(g),
+    [],
+  );
+  const drawCommsCallback = useCallback(
+    (g: Graphics) => drawCommsDevice(g),
+    [],
+  );
+
   const bubbleOffset = -80;
 
   return (
     <pixiContainer x={position.x} y={position.y}>
-      {/* Chair - behind everything */}
-      {chairTexture ? (
-        <pixiSprite
-          texture={chairTexture}
-          anchor={0.5}
-          x={5}
-          y={30}
-          scale={0.1386}
-        />
-      ) : (
-        <pixiGraphics draw={drawFallbackChair} />
-      )}
+      {/* Command chair - behind everything */}
+      <pixiGraphics draw={drawChairCallback} x={5} y={30} />
 
       {/* Boss character (body + accessories) - hidden when away from desk */}
       {!isAway && (
@@ -289,17 +367,8 @@ function BossSpriteComponent({
         </pixiContainer>
       )}
 
-      {/* Desk surface - in front of boss */}
-      {deskTexture ? (
-        <pixiSprite
-          texture={deskTexture}
-          anchor={{ x: 0.5, y: 0 }}
-          y={30}
-          scale={0.105}
-        />
-      ) : (
-        <pixiGraphics draw={drawFallbackDesk} />
-      )}
+      {/* Command desk surface - in front of boss */}
+      <pixiGraphics draw={drawDeskCallback} x={0} y={30} />
 
       {/* Keyboard - on desk surface */}
       {keyboardTexture && (
@@ -331,16 +400,11 @@ function BossSpriteComponent({
         />
       )}
 
-      {/* Monitor - left side of desk */}
-      {monitorTexture && (
-        <pixiSprite
-          texture={monitorTexture}
-          anchor={0.5}
-          x={-45}
-          y={27}
-          scale={0.08}
-        />
-      )}
+      {/* Holographic monitor - left side of desk */}
+      <pixiGraphics draw={drawMonitorCallback} x={-45} y={27} />
+
+      {/* Comms device (phone replacement) - right side of desk */}
+      <pixiGraphics draw={drawCommsCallback} x={48} y={38} />
 
       {/* Boss label - hidden when away from desk */}
       {!isAway && (

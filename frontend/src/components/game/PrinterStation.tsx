@@ -1,14 +1,19 @@
 /**
  * PrinterStation Component
  *
- * Renders the printer station with:
- * - Small desk as printer stand
- * - Printer on top
- * - Animated paper emerging when printing
+ * Renders a procedural space station comms/data terminal.
+ * Replaces sprite-based desk+printer with dark-metal terminal graphics.
+ *
+ * - Terminal base: dark navy roundRect with blue stroke
+ * - Screen/display: smaller roundRect on top
+ * - Status LED: GREEN when idle, GOLD when printing
+ * - Printing indicator: animated glow pulse when isPrinting
  */
 
-import { type ReactNode, useState, useEffect, useRef } from "react";
+import { type ReactNode, useCallback, useRef } from "react";
 import { Graphics, Texture } from "pixi.js";
+import { useTick } from "@pixi/react";
+import { GOLD, BLUE, GREEN } from "@/constants/spaceTheme";
 
 interface PrinterStationProps {
   /** X position of the printer station */
@@ -17,167 +22,119 @@ interface PrinterStationProps {
   y: number;
   /** Whether a report is being printed */
   isPrinting: boolean;
-  /** Desk texture for the printer stand */
+  /** Desk texture for the printer stand (unused — procedural rendering) */
   deskTexture: Texture | null;
-  /** Printer texture */
+  /** Printer texture (unused — procedural rendering) */
   printerTexture: Texture | null;
 }
 
-// Paper rotation angle in radians
-const PAPER_ANGLE_DEG = 24;
-const PAPER_ANGLE_RAD = (PAPER_ANGLE_DEG * Math.PI) / 180;
+/** No-op draw so pixiGraphics with ref satisfies the required `draw` prop. */
+const noop = (_g: Graphics) => {};
 
-/**
- * Hook to animate the print progress
- */
-function usePrintAnimation(isPrinting: boolean): number {
-  const [progress, setProgress] = useState(0);
+// ============================================================================
+// STATIC TERMINAL BODY
+// ============================================================================
 
-  // Animate paper emerging when printing starts
-  useEffect(() => {
-    if (!isPrinting) {
-      return;
-    }
-
-    const duration = 2000; // 2 seconds to print
-    let startTime: number | null = null;
-    let animationId: number;
-
-    const animate = (timestamp: number) => {
-      if (!startTime) startTime = timestamp;
-      const elapsed = timestamp - startTime;
-      const progressValue = Math.min(elapsed / duration, 1);
-      // Ease out cubic for natural paper motion
-      const eased = 1 - Math.pow(1 - progressValue, 3);
-      setProgress(eased);
-
-      if (progressValue < 1) {
-        animationId = requestAnimationFrame(animate);
-      }
-    };
-
-    animationId = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationId);
-  }, [isPrinting]);
-
-  // Reset progress when printing stops
-  useEffect(() => {
-    if (!isPrinting) {
-      const id = requestAnimationFrame(() => setProgress(0));
-      return () => cancelAnimationFrame(id);
-    }
-  }, [isPrinting]);
-
-  return progress;
-}
-
-/**
- * Draws the paper with text lines
- */
-function drawPaper(g: Graphics): void {
+function drawTerminalBase(g: Graphics): void {
   g.clear();
-  const paperWidth = 23;
-  const paperHeight = 41;
 
-  // White paper with slight shadow
-  g.rect(-paperWidth / 2, 0, paperWidth, paperHeight);
-  g.fill(0xf5f5f5);
-  g.stroke({ width: 1, color: 0xcccccc });
+  // Terminal base: 60×30, dark metal fill, blue stroke
+  g.roundRect(-30, 0, 60, 30, 4);
+  g.fill({ color: 0x0a1520 });
+  g.stroke({ width: 1, color: BLUE, alpha: 0.3 });
 
-  // Fake text lines
-  const lineColor = 0x666666;
-  const startY = 12;
-  const lineSpacing = 4;
-  const margin = 3;
+  // Screen/display panel on top: narrower, darker
+  g.roundRect(-22, -18, 44, 16, 3);
+  g.fill({ color: 0x020810 });
+  g.stroke({ width: 0.8, color: BLUE, alpha: 0.4 });
 
-  for (let i = 0; i < 6; i++) {
-    const lineWidth = i % 2 === 0 ? 16 : 12; // Vary line lengths
-    g.rect(-paperWidth / 2 + margin, startY + i * lineSpacing, lineWidth, 1.5);
-    g.fill(lineColor);
+  // Decorative scan-line inside screen
+  for (let i = 0; i < 3; i++) {
+    g.rect(-18, -14 + i * 4, 36, 1);
+    g.fill({ color: BLUE, alpha: 0.08 });
   }
+
+  // Bottom connector nubs (two small rectangles at base)
+  g.rect(-16, 30, 8, 4);
+  g.fill({ color: 0x071018 });
+  g.rect(8, 30, 8, 4);
+  g.fill({ color: 0x071018 });
 }
 
-/**
- * Draws the clipping mask for paper animation
- */
-function drawMask(g: Graphics): void {
-  g.clear();
-  g.rect(-25, -100, 50, 75);
-  g.fill(0xffffff);
+// ============================================================================
+// ANIMATED PRINTING INDICATOR + STATUS LED
+// ============================================================================
+
+interface PrintingIndicatorProps {
+  isPrinting: boolean;
 }
+
+function PrintingIndicator({ isPrinting }: PrintingIndicatorProps): ReactNode {
+  const gRef = useRef<Graphics>(null);
+  const timeRef = useRef(0);
+
+  useTick((ticker) => {
+    timeRef.current += ticker.deltaTime * 0.04;
+    const g = gRef.current;
+    if (!g) return;
+
+    g.clear();
+
+    // Status LED — top-right corner of terminal base
+    const ledColor = isPrinting ? GOLD : GREEN;
+    const ledAlpha = isPrinting
+      ? 0.6 + Math.sin(timeRef.current * 6) * 0.4  // pulse when printing
+      : 0.9;
+
+    g.circle(20, 6, 2.5);
+    g.fill({ color: ledColor, alpha: ledAlpha });
+
+    // When printing: draw a small animated data-transfer bar on the screen
+    if (isPrinting) {
+      const barProgress = (Math.sin(timeRef.current * 4) * 0.5 + 0.5);
+      const barW = Math.floor(barProgress * 30);
+
+      // Background track
+      g.rect(-15, -10, 30, 3);
+      g.fill({ color: BLUE, alpha: 0.12 });
+
+      // Active segment
+      if (barW > 0) {
+        g.rect(-15, -10, barW, 3);
+        g.fill({ color: BLUE, alpha: 0.7 });
+      }
+
+      // Blinking "TX" indicator dot
+      const blinkOn = Math.sin(timeRef.current * 10) > 0;
+      if (blinkOn) {
+        g.circle(-20, -9, 1.5);
+        g.fill({ color: GOLD, alpha: 0.9 });
+      }
+    }
+  });
+
+  return <pixiGraphics ref={gRef} draw={noop} />;
+}
+
+// ============================================================================
+// MAIN EXPORT
+// ============================================================================
 
 export function PrinterStation({
   x,
   y,
   isPrinting,
-  deskTexture,
-  printerTexture,
+  // deskTexture and printerTexture are intentionally unused — procedural only
 }: PrinterStationProps): ReactNode {
-  const printProgress = usePrintAnimation(isPrinting);
-  const [mask, setMask] = useState<Graphics | null>(null);
-  const maskRef = useRef<Graphics | null>(null);
-
-  // Calculate paper position based on progress
-  const paperY = -51 + Math.cos(PAPER_ANGLE_RAD) * 50 * (1 - printProgress);
-  const paperX = 10 - Math.sin(PAPER_ANGLE_RAD) * 50 * (1 - printProgress);
-  const paperAlpha = printProgress > 0.1 ? 1 : printProgress * 10;
+  const drawBase = useCallback((g: Graphics) => drawTerminalBase(g), []);
 
   return (
     <pixiContainer x={x} y={y}>
-      {/* Small desk as printer stand (60% width, full height) */}
-      {deskTexture && (
-        <pixiSprite
-          texture={deskTexture}
-          anchor={{ x: 0.5, y: 0 }}
-          scale={{ x: 0.105 * 0.6, y: 0.105 }}
-        />
-      )}
+      {/* Static terminal body */}
+      <pixiGraphics draw={drawBase} />
 
-      {/* Printer (on top of desk) */}
-      {printerTexture && (
-        <pixiSprite
-          texture={printerTexture}
-          anchor={{ x: 0.5, y: 0.8 }}
-          y={15}
-          scale={0.08}
-        />
-      )}
-
-      {/* Clipping mask for paper emerging from printer slot */}
-      <pixiGraphics
-        draw={drawMask}
-        ref={(g) => {
-          if (g && g !== maskRef.current) {
-            maskRef.current = g;
-            setMask(g);
-          }
-        }}
-        rotation={PAPER_ANGLE_RAD}
-        x={-15}
-        y={7}
-      />
-
-      {/* Printed paper - animates emerging from printer */}
-      <pixiContainer
-        y={paperY}
-        x={paperX}
-        rotation={PAPER_ANGLE_RAD}
-        alpha={paperAlpha}
-        mask={mask}
-      >
-        <pixiGraphics draw={drawPaper} />
-        <pixiText
-          text="REPORT"
-          anchor={{ x: 0.5, y: 0 }}
-          y={4}
-          style={{
-            fontFamily: "monospace",
-            fontSize: 5,
-            fill: 0xff0000,
-            fontWeight: "bold",
-          }}
-        />
-      </pixiContainer>
+      {/* Animated LED + printing indicator (re-draws every tick) */}
+      <PrintingIndicator isPrinting={isPrinting} />
     </pixiContainer>
   );
 }
