@@ -1,103 +1,120 @@
 "use client";
 
-import { Graphics } from "pixi.js";
-import { useState, useCallback, useEffect, type ReactNode } from "react";
-import { usePreferencesStore } from "@/stores/preferencesStore";
-import { DigitalClock } from "./DigitalClock";
-
 /**
- * WallClock - Animated clock for the office wall
+ * WallClock — Compact space-station clock for top-right wall area.
  *
- * Displays current time in analog or digital format based on user preferences.
- * Click to cycle through: analog → digital 12h → digital 24h → analog
+ * Gold HH:MM digits with blinking colon, blue seconds.
+ * Dark metal panel frame matching station aesthetic.
  */
+
+import { type ReactNode, useState, useEffect, useRef, useCallback } from "react";
+import { Graphics } from "pixi.js";
+import { useTick } from "@pixi/react";
+import { GOLD, BLUE, goldAlpha, blueAlpha } from "@/constants/spaceTheme";
+
 export function WallClock(): ReactNode {
-  const [time, setTime] = useState(new Date());
-  const clockType = usePreferencesStore((s) => s.clockType);
-  const clockFormat = usePreferencesStore((s) => s.clockFormat);
-  const cycleClockMode = usePreferencesStore((s) => s.cycleClockMode);
+  const [now, setNow] = useState<Date>(() => new Date());
 
   useEffect(() => {
-    const interval = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
   }, []);
 
-  const handleClick = useCallback(() => {
-    cycleClockMode();
-  }, [cycleClockMode]);
+  const [colonAlpha, setColonAlpha] = useState(1);
+  const timeRef = useRef(0);
 
-  const drawAnalogClock = useCallback(
-    (g: Graphics) => {
-      g.clear();
-      // Outer black ring
-      g.circle(0, 0, 44);
-      g.fill(0x000000);
-      // Face
-      g.circle(0, 0, 40);
-      g.fill(0xffffff);
-      g.stroke({ width: 4, color: 0x2d3748 });
+  useTick((ticker) => {
+    timeRef.current += ticker.deltaTime * 0.016;
+    setColonAlpha(Math.sin(timeRef.current * 4) > 0 ? 1.0 : 0.3);
+  });
 
-      // Numbers (simple dots)
-      for (let i = 0; i < 12; i++) {
-        const angle = i * 30 * (Math.PI / 180);
-        g.circle(Math.sin(angle) * 32, -Math.cos(angle) * 32, 2);
-        g.fill(0x2d3748);
-      }
+  const hh = now.getHours().toString().padStart(2, "0");
+  const mm = now.getMinutes().toString().padStart(2, "0");
+  const ss = now.getSeconds().toString().padStart(2, "0");
 
-      // Hands
-      const hours = time.getHours() % 12;
-      const mins = time.getMinutes();
-      const secs = time.getSeconds();
+  const drawFrame = useCallback((g: Graphics) => {
+    g.clear();
 
-      // Hour hand
-      const hAngle = (hours * 30 + mins * 0.5) * (Math.PI / 180);
-      g.moveTo(0, 0);
-      g.lineTo(Math.sin(hAngle) * 20, -Math.cos(hAngle) * 20);
-      g.stroke({ width: 4, color: 0x2d3748 });
+    // Small recessed panel
+    g.roundRect(0, 0, 80, 36, 4);
+    g.fill({ color: 0x060e1a, alpha: 0.85 });
+    g.stroke({ width: 1, color: GOLD, alpha: 0.2 });
 
-      // Minute hand
-      const mAngle = mins * 6 * (Math.PI / 180);
-      g.moveTo(0, 0);
-      g.lineTo(Math.sin(mAngle) * 30, -Math.cos(mAngle) * 30);
-      g.stroke({ width: 3, color: 0x2d3748 });
+    // Inner glow border
+    g.roundRect(2, 2, 76, 32, 3);
+    g.stroke({ width: 0.5, ...blueAlpha(0.15) });
 
-      // Second hand
-      const sAngle = secs * 6 * (Math.PI / 180);
-      g.moveTo(0, 0);
-      g.lineTo(Math.sin(sAngle) * 35, -Math.cos(sAngle) * 35);
-      g.stroke({ width: 1, color: 0xef4444 });
-    },
-    [time],
-  );
+    // Top gold trim
+    g.rect(8, 0, 64, 1.5);
+    g.fill(goldAlpha(0.25));
+  }, []);
 
-  // Draw a clickable hit area (sized for the larger of analog/digital)
-  const drawHitArea = useCallback(
-    (g: Graphics) => {
-      g.clear();
-      if (clockType === "analog") {
-        g.circle(0, 0, 44);
-      } else {
-        // Rectangular hit area for digital clock
-        g.roundRect(-54, -28, 108, 56, 6);
-      }
-      g.fill({ color: 0x000000, alpha: 0 }); // Invisible but clickable
-    },
-    [clockType],
-  );
+  const cx = 40; // center of 80px frame
 
   return (
-    <pixiContainer
-      eventMode="static"
-      cursor="pointer"
-      onPointerDown={handleClick}
-    >
-      {clockType === "analog" ? (
-        <pixiGraphics draw={drawAnalogClock} />
-      ) : (
-        <DigitalClock format={clockFormat} />
-      )}
-      {/* Invisible hit area to ensure clicks register */}
-      <pixiGraphics draw={drawHitArea} />
+    <pixiContainer>
+      <pixiGraphics draw={drawFrame} />
+
+      {/* HH */}
+      <pixiText
+        text={hh}
+        x={cx - 16}
+        y={13}
+        anchor={{ x: 1, y: 0.5 }}
+        style={{
+          fontFamily: "monospace",
+          fontSize: 14,
+          fontWeight: "bold",
+          fill: GOLD,
+        }}
+        resolution={2}
+      />
+
+      {/* Blinking colon */}
+      <pixiText
+        text=":"
+        x={cx}
+        y={13}
+        anchor={0.5}
+        alpha={colonAlpha}
+        style={{
+          fontFamily: "monospace",
+          fontSize: 14,
+          fontWeight: "bold",
+          fill: GOLD,
+        }}
+        resolution={2}
+      />
+
+      {/* MM */}
+      <pixiText
+        text={mm}
+        x={cx + 16}
+        y={13}
+        anchor={{ x: 0, y: 0.5 }}
+        style={{
+          fontFamily: "monospace",
+          fontSize: 14,
+          fontWeight: "bold",
+          fill: GOLD,
+        }}
+        resolution={2}
+      />
+
+      {/* Seconds */}
+      <pixiText
+        text={ss}
+        x={cx}
+        y={27}
+        anchor={0.5}
+        style={{
+          fontFamily: "monospace",
+          fontSize: 8,
+          fontWeight: "bold",
+          fill: BLUE,
+        }}
+        resolution={2}
+      />
     </pixiContainer>
   );
 }

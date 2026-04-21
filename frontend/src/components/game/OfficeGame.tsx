@@ -78,6 +78,7 @@ import { TitleBanner } from "./TitleBanner";
 import { MainScreen } from "./MainScreen";
 import { BlastDoor } from "./BlastDoor";
 import { CrewPanel } from "./CrewPanel";
+import { WallClock } from "./WallClock";
 import { PrinterStation } from "./PrinterStation";
 import { CommandChair, BioPod } from "./SpaceProps";
 import { DebugOverlays } from "./DebugOverlays";
@@ -340,6 +341,11 @@ export function OfficeGame(): ReactNode {
                   {/* CrewPanel hidden — whiteboard occupies this wall space */}
                   {/* <CrewPanel /> */}
 
+                  {/* Wall clock — top right */}
+                  <pixiContainer x={1190} y={10}>
+                    <WallClock />
+                  </pixiContainer>
+
                   {/* Whiteboard (kept) */}
                   <pixiContainer
                     x={WHITEBOARD_POSITION.x}
@@ -360,13 +366,13 @@ export function OfficeGame(): ReactNode {
                   {/* Bio-pod (replaces plant in space theme) */}
                   <BioPod x={PLANT_POSITION.x} y={PLANT_POSITION.y} />
 
-                  {/* Elevator with animated doors and agents inside */}
-                  <Elevator
+                  {/* Airlock hidden — visual clutter, agents spawn directly */}
+                  {/* <Elevator
                     isOpen={isElevatorOpen}
                     agents={agents}
                     headsetTexture={textures.headset}
                     sunglassesTexture={textures.sunglasses}
-                  />
+                  /> */}
 
                   {/* Y-sorted layer: chairs and agents sorted by Y position (higher Y = in front) */}
                   <pixiContainer sortableChildren={true}>

@@ -75,28 +75,69 @@ export function useDeskPositions(
 function drawConsoleSurface(g: Graphics): void {
   g.clear();
 
-  // --- Desk surface: dark metal panel ---
-  const dw = 120;
-  const dh = 40;
+  const dw = 130;
+  const dh = 44;
   const dx = -dw / 2;
-  const dy = 30;
+  const dy = 26;
   const r = 4;
 
+  // Shadow/depth layer (offset down-right for 3D effect)
+  g.roundRect(dx + 2, dy + 3, dw, dh, r);
+  g.fill({ color: 0x020810, alpha: 0.6 });
+
+  // Side panel thickness (front edge — gives depth illusion)
+  g.roundRect(dx, dy + dh - 4, dw, 8, 2);
+  g.fill({ color: 0x071018, alpha: 1 });
+  g.stroke({ width: 0.5, color: GOLD, alpha: 0.12 });
+
+  // Main desk surface
   g.roundRect(dx, dy, dw, dh, r);
-  g.fill({ color: 0x0a1520, alpha: 0.9 });
-  g.stroke({ width: 0.5, color: BLUE, alpha: 0.3 });
+  g.fill({ color: 0x0c1e30, alpha: 1 });
+  g.stroke({ width: 1.5, color: GOLD, alpha: 0.3 });
 
-  // Top-edge highlight (thin line across the top)
-  g.moveTo(dx + r, dy);
-  g.lineTo(dx + dw - r, dy);
-  g.stroke({ width: 1, color: BLUE, alpha: 0.1 });
-
-  // --- Keyboard area: small recessed panel ---
-  const kw = 40;
-  const kh = 12;
-  g.roundRect(-kw / 2, 42, kw, kh, 2);
-  g.fill({ color: 0x060e1a, alpha: 1.0 });
+  // Inner border (blue accent like other panels)
+  g.roundRect(dx + 3, dy + 3, dw - 6, dh - 6, 2);
   g.stroke({ width: 0.5, color: BLUE, alpha: 0.2 });
+
+  // Top-edge highlight (bright gold trim)
+  g.rect(dx + 8, dy, dw - 16, 1.5);
+  g.fill({ color: GOLD, alpha: 0.25 });
+
+  // Corner bolts (4 corners, matching station aesthetic)
+  const boltInset = 7;
+  const bolts: [number, number][] = [
+    [dx + boltInset, dy + boltInset],
+    [dx + dw - boltInset, dy + boltInset],
+    [dx + boltInset, dy + dh - boltInset],
+    [dx + dw - boltInset, dy + dh - boltInset],
+  ];
+  for (const [bx, by] of bolts) {
+    g.circle(bx, by, 2);
+    g.fill({ color: 0x1a3050, alpha: 1 });
+    g.stroke({ width: 0.6, color: GOLD, alpha: 0.4 });
+  }
+
+  // Keyboard recess (centered, slightly recessed)
+  const kw = 44;
+  const kh = 14;
+  g.roundRect(-kw / 2, dy + 14, kw, kh, 2);
+  g.fill({ color: 0x060e1a, alpha: 1 });
+  g.stroke({ width: 0.5, color: BLUE, alpha: 0.25 });
+
+  // Keyboard key rows (tiny lines for detail)
+  for (let row = 0; row < 3; row++) {
+    const ky = dy + 17 + row * 4;
+    g.rect(-kw / 2 + 4, ky, kw - 8, 1);
+    g.fill({ color: BLUE, alpha: 0.08 });
+  }
+
+  // Desk support legs (visible below desk for depth)
+  g.rect(-dw / 2 + 10, dy + dh + 2, 6, 10);
+  g.fill({ color: 0x081420, alpha: 0.8 });
+  g.stroke({ width: 0.3, color: GOLD, alpha: 0.1 });
+  g.rect(dw / 2 - 16, dy + dh + 2, 6, 10);
+  g.fill({ color: 0x081420, alpha: 0.8 });
+  g.stroke({ width: 0.3, color: GOLD, alpha: 0.1 });
 }
 
 /**
@@ -107,31 +148,62 @@ function makeMonitorDraw(deskIndex: number) {
   return function drawMonitor(g: Graphics): void {
     g.clear();
 
-    // --- Monitor frame ---
+    // --- Monitor ---
     const mx = -70;
-    const my = 10;
-    const mw = 50;
-    const mh = 35;
+    const my = 6;
+    const mw = 54;
+    const mh = 38;
     const mr = 3;
 
+    // Monitor stand (thin post from desk to screen)
+    g.rect(mx + mw / 2 - 2, my + mh, 4, 8);
+    g.fill({ color: 0x081420, alpha: 1 });
+    g.stroke({ width: 0.3, color: GOLD, alpha: 0.15 });
+
+    // Monitor stand base
+    g.roundRect(mx + mw / 2 - 10, my + mh + 6, 20, 4, 2);
+    g.fill({ color: 0x0a1828, alpha: 1 });
+    g.stroke({ width: 0.5, color: GOLD, alpha: 0.1 });
+
+    // Monitor shadow
+    g.roundRect(mx + 2, my + 2, mw, mh, mr);
+    g.fill({ color: 0x010408, alpha: 0.4 });
+
+    // Monitor frame (outer)
     g.roundRect(mx, my, mw, mh, mr);
-    g.fill({ color: 0x020810, alpha: 1.0 });
-    g.stroke({ width: 1, color: BLUE, alpha: 0.4 });
+    g.fill({ color: 0x0a1520, alpha: 1 });
+    g.stroke({ width: 1.5, color: GOLD, alpha: 0.25 });
 
-    // Screen inner glow (slightly inset)
-    const ig = 3;
+    // Screen area (inner glow)
+    const ig = 4;
     g.roundRect(mx + ig, my + ig, mw - ig * 2, mh - ig * 2, 2);
-    g.fill({ color: BLUE, alpha: 0.03 });
+    g.fill({ color: 0x020810, alpha: 1 });
+    g.stroke({ width: 0.5, color: BLUE, alpha: 0.35 });
 
-    // --- LED indicator dots (3 stacked, right side of console) ---
-    const ledX = 45;
-    const ledStartY = 32;
-    const ledSpacing = 7;
+    // Screen content glow
+    g.roundRect(mx + ig + 2, my + ig + 2, mw - ig * 2 - 4, mh - ig * 2 - 4, 1);
+    g.fill({ color: BLUE, alpha: 0.04 });
+
+    // Scan lines (subtle horizontal lines for CRT effect)
+    for (let sy = my + ig + 3; sy < my + mh - ig - 2; sy += 3) {
+      g.rect(mx + ig + 2, sy, mw - ig * 2 - 4, 0.5);
+      g.fill({ color: BLUE, alpha: 0.03 });
+    }
+
+    // --- LED indicator dots (right side of console) ---
+    const ledX = 48;
+    const ledStartY = 30;
+    const ledSpacing = 8;
     const ledColors: readonly number[] = LED_COLORS;
 
     for (let dot = 0; dot < 3; dot++) {
       const color = ledColors[(deskIndex + dot) % ledColors.length];
-      const isActive = dot === 0; // first dot always "on"
+      const isActive = dot === 0;
+      // LED glow halo
+      if (isActive) {
+        g.circle(ledX, ledStartY + dot * ledSpacing, 4);
+        g.fill({ color, alpha: 0.15 });
+      }
       g.circle(ledX, ledStartY + dot * ledSpacing, 2);
       g.fill({ color, alpha: isActive ? 0.9 : 0.25 });
     }

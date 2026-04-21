@@ -15,23 +15,48 @@ import { GOLD, BLUE, GREEN } from "@/constants/spaceTheme";
 function drawCommandChair(g: Graphics): void {
   g.clear();
 
-  // Seat base — dark metal oval
-  g.roundRect(-16, 24, 32, 18, 6);
-  g.fill({ color: 0x0a1520, alpha: 0.9 });
-  g.stroke({ width: 0.5, color: BLUE, alpha: 0.2 });
+  // Shadow (depth)
+  g.roundRect(-14, 42, 28, 6, 3);
+  g.fill({ color: 0x010408, alpha: 0.4 });
 
-  // Seat cushion — slightly lighter
-  g.roundRect(-12, 26, 24, 12, 4);
-  g.fill({ color: 0x0e1e30, alpha: 0.8 });
+  // Chair base (5-star caster base)
+  g.roundRect(-16, 40, 32, 5, 2);
+  g.fill({ color: 0x0a1828, alpha: 1 });
+  g.stroke({ width: 0.5, color: GOLD, alpha: 0.15 });
+  // Caster dots
+  g.circle(-14, 43, 1.5);
+  g.fill({ color: 0x1a3050, alpha: 1 });
+  g.circle(14, 43, 1.5);
+  g.fill({ color: 0x1a3050, alpha: 1 });
+  g.circle(0, 44, 1.5);
+  g.fill({ color: 0x1a3050, alpha: 1 });
 
-  // Chair stem
-  g.rect(-2, 36, 4, 6);
-  g.fill({ color: 0x081420, alpha: 0.9 });
+  // Chair stem (hydraulic post)
+  g.rect(-2, 34, 4, 8);
+  g.fill({ color: 0x081420, alpha: 1 });
+  g.stroke({ width: 0.3, color: BLUE, alpha: 0.15 });
 
-  // Base — small star pattern
-  g.roundRect(-14, 40, 28, 5, 2);
-  g.fill({ color: 0x081420, alpha: 0.8 });
-  g.stroke({ width: 0.3, color: GOLD, alpha: 0.1 });
+  // Seat frame (outer)
+  g.roundRect(-18, 22, 36, 16, 5);
+  g.fill({ color: 0x0c1e30, alpha: 1 });
+  g.stroke({ width: 1, color: GOLD, alpha: 0.25 });
+
+  // Seat cushion (inner, lighter)
+  g.roundRect(-14, 24, 28, 11, 3);
+  g.fill({ color: 0x122840, alpha: 1 });
+  g.stroke({ width: 0.5, color: BLUE, alpha: 0.15 });
+
+  // Seat highlight (top edge — gives rounded 3D feel)
+  g.rect(-12, 24, 24, 1.5);
+  g.fill({ color: BLUE, alpha: 0.08 });
+
+  // Armrests
+  g.roundRect(-20, 24, 5, 12, 2);
+  g.fill({ color: 0x0a1828, alpha: 1 });
+  g.stroke({ width: 0.5, color: GOLD, alpha: 0.15 });
+  g.roundRect(15, 24, 5, 12, 2);
+  g.fill({ color: 0x0a1828, alpha: 1 });
+  g.stroke({ width: 0.5, color: GOLD, alpha: 0.15 });
 }
 
 export function CommandChair(): ReactNode {
