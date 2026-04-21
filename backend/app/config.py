@@ -38,8 +38,14 @@ class Settings(BaseSettings):
     # Rotation = redeploy both sides.
     EXTERNAL_EVENT_SECRET: str = ""
 
+    # Discord Bot credentials (Commander Bridge). Optional — only needed
+    # when running the Discord bot alongside the canvas backend.
+    DISCORD_BOT_TOKEN: str = ""
+    DISCORD_APP_ID: str = ""
+
     model_config = SettingsConfigDict(
         env_file=[str(_PROJECT_ROOT / ".env"), ".env"],
+        extra="ignore",
     )
 
     def translate_path(self, path: str) -> str:
