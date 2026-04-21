@@ -53,53 +53,43 @@ export const BOSS_RUG_POSITION = { x: 640, y: 940 };
 export const TRASH_CAN_OFFSET = { x: 110, y: 65 };
 
 // ============================================================================
-// BRIDGE AGENT ROW (Commander Bridge ephemeral sprites)
+// BRIDGE AGENT DESK POSITIONS (Commander Bridge ephemeral sprites)
 // ============================================================================
 //
-// Bridge sprites sit in a dedicated row above the desk area — they are
-// *not* desk-bound and must stay out of the y-sort lane used by
-// AgentSprite/Boss to prevent z-fighting when a bridge event fires while
-// agents are in motion.
+// Bridge sprites sit at desk positions — same grid as normal Claude Code
+// agents.  This keeps them visually "at work" in the office rather than
+// floating in a dense horizontal band.
 //
-// Layout envelope chosen after surveying canvas.ts (1280 × 1024):
-//   - y = 340 sits below the whiteboard/wall decoration zone (y ≲ 210)
-//     and above the first desk bank (desks begin around y ≈ 500).
-//   - x = 96 leaves breathing room from the left wall, matches the
-//     spacing rhythm the existing office uses.
-//   - 96px horizontal spacing keeps sprites distinct without requiring
-//     label truncation for short "Dept X" labels.
-//   - 120px vertical spacing accounts for bubble + label stacked above
-//     the sprite (bubble extends ~80px up).
-//
-// Wrap at 12 sprites per row: 96 + 11 × 96 = 1152, leaving a safe 128px
-// right-margin before the wall clock / water cooler column.
+// Constants mirror DeskGrid.tsx (DESK_START_X/Y, DESK_SPACING_X/Y, ROW_SIZE)
+// so bridge agents land exactly on top of real desk sprites.
 
-/** Origin of the Bridge agent row (top-left of slot 0). */
-export const BRIDGE_ROW_ORIGIN = { x: 96, y: 340 };
+/** Columns per desk row (matches DeskGrid ROW_SIZE). */
+const BRIDGE_DESK_COLS = 4;
 
-/** Horizontal gap between adjacent Bridge sprites. */
-export const BRIDGE_ROW_SPACING_X = 96;
+/** Desk grid origin X (matches DeskGrid DESK_START_X). */
+const BRIDGE_DESK_START_X = 256;
 
-/** Vertical gap between Bridge rows when wrapping to a second row. */
-export const BRIDGE_ROW_SPACING_Y = 120;
+/** Desk grid origin Y (matches DeskGrid DESK_START_Y). */
+const BRIDGE_DESK_START_Y = 408;
 
-/** Max sprites per row before wrapping — derived from canvas width above. */
-export const BRIDGE_ROW_MAX_PER_ROW = 12;
+/** Horizontal spacing between desk centres (matches DeskGrid DESK_SPACING_X). */
+const BRIDGE_DESK_SPACING_X = 256;
+
+/** Vertical spacing between desk rows (matches DeskGrid DESK_SPACING_Y). */
+const BRIDGE_DESK_SPACING_Y = 192;
 
 /**
- * Deterministic layout for Bridge sprites.
+ * Deterministic layout for Bridge sprites, aligned to the desk grid.
  *
  * Given a zero-based index (natural insertion order of the
- * `bridgeAgents` Map), returns the absolute canvas position the sprite
- * should render at. Pure function so callers can memoise without
- * worrying about hidden state. Wraps into additional rows past
- * {@link BRIDGE_ROW_MAX_PER_ROW}.
+ * `bridgeAgents` Map), returns the absolute canvas position matching
+ * the desk at that slot.  Pure function — callers can memoise safely.
  */
 export function bridgeAgentPosition(index: number): { x: number; y: number } {
-  const row = Math.floor(index / BRIDGE_ROW_MAX_PER_ROW);
-  const col = index % BRIDGE_ROW_MAX_PER_ROW;
+  const row = Math.floor(index / BRIDGE_DESK_COLS);
+  const col = index % BRIDGE_DESK_COLS;
   return {
-    x: BRIDGE_ROW_ORIGIN.x + col * BRIDGE_ROW_SPACING_X,
-    y: BRIDGE_ROW_ORIGIN.y + row * BRIDGE_ROW_SPACING_Y,
+    x: BRIDGE_DESK_START_X + col * BRIDGE_DESK_SPACING_X,
+    y: BRIDGE_DESK_START_Y + row * BRIDGE_DESK_SPACING_Y,
   };
 }

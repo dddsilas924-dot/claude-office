@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Claude Office — 司令塔オフィス可視化",
+  title: "ミスターDのAIオフィス",
   description:
-    "Claude Code と Commander Bridge の稼働状況を仮想オフィスでリアルタイムに可視化するピクセルアート画面。",
+    "えむ未来会社の全部門エージェントをリアルタイムに可視化するピクセルアート画面。",
 };
 
 export default function RootLayout({

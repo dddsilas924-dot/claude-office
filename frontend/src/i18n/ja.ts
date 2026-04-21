@@ -2,7 +2,7 @@ import type { TranslationKey } from "./en";
 
 const ja: Record<TranslationKey, string> = {
   // App
-  "app.title": "オフィス可視化",
+  "app.title": "ミスターDのAIオフィス",
   "app.initializingSystems": "システム起動中...",
 
   // Header Controls

@@ -19,7 +19,8 @@ import {
   Sprite,
   Application as PixiApplication,
 } from "pixi.js";
-import { useMemo, useEffect, useRef, type ReactNode } from "react";
+import { useMemo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Assets, Texture } from "pixi.js";
 import {
   TransformWrapper,
   TransformComponent,
@@ -113,6 +114,51 @@ export function OfficeGame(): ReactNode {
   // Load all office textures
   const { textures, loaded: spritesLoaded } = useOfficeTextures();
 
+  // ── Bridge agent character textures (fal.ai pixel art) ──────────────
+  const [charTextures, setCharTextures] = useState<Map<string, Texture>>(
+    new Map(),
+  );
+  useEffect(() => {
+    // Map dept_id → pixel art portrait (transparent PNG, 128px tall).
+    // Keys include both long forms (Claude Code hooks) and short
+    // forms (Commander Bridge / demo_bridge_sprites.py).
+    const CHARACTER_FILES: Record<string, string> = {
+      commander: "/sprites/characters/char_phil.png",
+      research: "/sprites/characters/char_ryou.png",
+      sales: "/sprites/characters/char_rei.png",
+      design: "/sprites/characters/char_rick.png",
+      content: "/sprites/characters/char_content.png",
+      writing: "/sprites/characters/char_kai.png",
+      ai_investment: "/sprites/characters/char_ai_invest.png",
+      ai_inv: "/sprites/characters/char_ai_invest.png",
+      phil_consulting: "/sprites/characters/char_phil_consul.png",
+      phil: "/sprites/characters/char_phil_consul.png",
+      new_biz: "/sprites/characters/char_tadashi.png",
+      advertising: "/sprites/characters/char_ena.png",
+      security: "/sprites/characters/char_security.png",
+      bridge: "/sprites/characters/bri_kun_pigeon.png",
+      doradora_sns: "/sprites/characters/char_phil.png",
+    };
+    let cancelled = false;
+    (async () => {
+      const map = new Map<string, Texture>();
+      await Promise.all(
+        Object.entries(CHARACTER_FILES).map(async ([deptId, path]) => {
+          try {
+            const tex = await Assets.load(path);
+            if (!cancelled) map.set(deptId, tex);
+          } catch {
+            // Fallback to capsule on load error
+          }
+        }),
+      );
+      if (!cancelled) setCharTextures(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Start animation system
   useAnimationSystem();
 
@@ -165,7 +211,7 @@ export function OfficeGame(): ReactNode {
   // Use store's elevator state (controlled by state machine)
   const isElevatorOpen = elevatorState === "open";
 
-  // Calculate occupied desks
+  // Calculate occupied desks (normal agents + bridge agents)
   const occupiedDesks = useMemo(() => {
     const desks = new Set<number>();
     for (const agent of agents.values()) {
@@ -173,8 +219,14 @@ export function OfficeGame(): ReactNode {
         desks.add(agent.desk);
       }
     }
+    // Bridge agents occupy desks sequentially (1-based desk numbers)
+    let bridgeIdx = 0;
+    for (const _bridge of bridgeAgents.values()) {
+      bridgeIdx++;
+      desks.add(bridgeIdx); // desk 1, 2, 3, ... (same slots as bridgeAgentPosition)
+    }
     return desks;
-  }, [agents]);
+  }, [agents, bridgeAgents]);
 
   // Calculate desk tasks for marquee display
   const deskTasks = useMemo(() => {
@@ -185,13 +237,20 @@ export function OfficeGame(): ReactNode {
         if (label) tasks.set(agent.desk, label);
       }
     }
+    // Bridge agents show their display name as desk task
+    let bridgeIdx = 0;
+    for (const bridge of bridgeAgents.values()) {
+      bridgeIdx++;
+      tasks.set(bridgeIdx, bridge.displayName);
+    }
     return tasks;
-  }, [agents]);
+  }, [agents, bridgeAgents]);
 
-  // Desk count
+  // Desk count — includes both normal and bridge agents
   const deskCount = useMemo(() => {
-    return Math.max(8, Math.ceil(agents.size / 4) * 4);
-  }, [agents.size]);
+    const totalNeeded = Math.max(agents.size, bridgeAgents.size);
+    return Math.max(8, Math.ceil(totalNeeded / 4) * 4);
+  }, [agents.size, bridgeAgents.size]);
 
   // Desk positions for Y-sorted rendering
   const deskPositions = useDeskPositions(deskCount, occupiedDesks);
@@ -567,28 +626,75 @@ export function OfficeGame(): ReactNode {
                    */}
                   {bridgeAgentList.map((bridge, index) => {
                     const pos = bridgeAgentPosition(index);
+                    // Extract leading emoji from displayName for badge
+                    const emojiMatch =
+                      bridge.displayName.match(
+                        /^(\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*\uFE0F?)\s*/u,
+                      );
+                    const deptEmoji = emojiMatch ? emojiMatch[1] : undefined;
                     const bubbleContent = bridge.message
                       ? {
-                          type: "thought" as const,
-                          text: bridge.message.slice(0, 120),
+                          type: "speech" as const,
+                          text: bridge.message.slice(0, 80),
+                          icon: deptEmoji,
                         }
                       : null;
+                    // Model badge color
+                    const modelColor =
+                      bridge.model === "opus"
+                        ? 0xf1c40f
+                        : bridge.model === "haiku"
+                          ? 0x2ecc71
+                          : 0x3498db; // default sonnet blue
+                    const modelLabel = bridge.model ?? "sonnet";
+
                     return (
-                      <AgentSprite
-                        key={`bridge-${bridge.deptId}`}
-                        id={`bridge-${bridge.deptId}`}
-                        name={bridge.displayName}
-                        color={bridge.agentColor}
-                        number={0}
-                        position={pos}
-                        phase="idle"
-                        bubble={bubbleContent}
-                        headsetTexture={textures.headset}
-                        sunglassesTexture={textures.sunglasses}
-                        renderBubble={true}
-                        renderLabel={true}
-                        isTyping={bridge.eventKind === "ASK_STARTED"}
-                      />
+                      <pixiContainer key={`bridge-${bridge.deptId}`}>
+                        <AgentSprite
+                          id={`bridge-${bridge.deptId}`}
+                          name={bridge.displayName}
+                          color={bridge.agentColor}
+                          number={0}
+                          position={pos}
+                          phase="idle"
+                          bubble={bubbleContent}
+                          headsetTexture={textures.headset}
+                          sunglassesTexture={textures.sunglasses}
+                          characterTexture={
+                            charTextures.get(bridge.deptId) ?? null
+                          }
+                          renderBubble={false}
+                          renderLabel={true}
+                          isTyping={bridge.eventKind === "ASK_STARTED"}
+                        />
+                        {/* Model badge below agent */}
+                        <pixiContainer
+                          x={pos.x}
+                          y={pos.y + 14}
+                          scale={0.5}
+                        >
+                          <pixiGraphics
+                            draw={(g) => {
+                              g.clear();
+                              g.roundRect(-24, -8, 48, 16, 8);
+                              g.fill(modelColor);
+                              g.stroke({ width: 1.5, color: 0xffffff });
+                            }}
+                          />
+                          <pixiText
+                            text={modelLabel}
+                            anchor={0.5}
+                            style={{
+                              fontFamily:
+                                '"Courier New", "SF Mono", monospace',
+                              fontSize: 12,
+                              fill: 0xffffff,
+                              fontWeight: "bold",
+                            }}
+                            resolution={2}
+                          />
+                        </pixiContainer>
+                      </pixiContainer>
                     );
                   })}
 
@@ -630,6 +736,37 @@ export function OfficeGame(): ReactNode {
                       <BossBubble content={boss.bubble.content} yOffset={-80} />
                     </pixiContainer>
                   )}
+
+                  {/* Bridge Agent Bubbles Layer — rendered after all other
+                      bubbles so they sit on top. Columns 0-1 get right-side
+                      bubbles, columns 2-3 get left-side bubbles so nothing
+                      clips off the canvas edge. */}
+                  {bridgeAgentList.map((bridge, index) => {
+                    if (!bridge.message) return null;
+                    const pos = bridgeAgentPosition(index);
+                    const col = index % 4;
+                    const emojiMatch = bridge.displayName.match(
+                      /^(\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*\uFE0F?)\s*/u,
+                    );
+                    const deptEmoji = emojiMatch ? emojiMatch[1] : undefined;
+                    return (
+                      <pixiContainer
+                        key={`bridge-bubble-${bridge.deptId}`}
+                        x={pos.x}
+                        y={pos.y}
+                      >
+                        <AgentBubble
+                          content={{
+                            type: "speech",
+                            text: bridge.message.slice(0, 80),
+                            icon: deptEmoji,
+                          }}
+                          yOffset={-93}
+                          side={col < 2 ? "right" : "left"}
+                        />
+                      </pixiContainer>
+                    );
+                  })}
                 </>
               )}
             </Application>

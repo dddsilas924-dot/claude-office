@@ -31,6 +31,7 @@ export interface AgentSpriteProps {
   bubble: BubbleContent | null;
   headsetTexture?: Texture | null;
   sunglassesTexture?: Texture | null;
+  characterTexture?: Texture | null; // Character portrait PNG (replaces capsule)
   renderBubble?: boolean; // Whether to render bubble (default true)
   renderLabel?: boolean; // Whether to render name label (default true)
   isTyping?: boolean; // Whether agent is typing (animates arms)
@@ -154,9 +155,11 @@ function AgentNameLabel({ name }: AgentNameLabelProps): ReactNode {
 interface BubbleProps {
   content: BubbleContent;
   yOffset: number;
+  /** Which side the bubble appears: "right" (default) or "left" of agent */
+  side?: "right" | "left";
 }
 
-function Bubble({ content, yOffset }: BubbleProps): ReactNode {
+function Bubble({ content, yOffset, side = "right" }: BubbleProps): ReactNode {
   const { text, type = "thought", icon } = content;
 
   // Convert icon name to emoji if needed
@@ -174,6 +177,8 @@ function Bubble({ content, yOffset }: BubbleProps): ReactNode {
   const capacity = (bWidth - paddingH) / charWidth;
   const lines = Math.max(1, Math.ceil(text.length / capacity));
   const bHeight = 35 + lines * 14;
+  // Tail points back toward the agent
+  const tailSide = side === "right" ? ("left" as const) : ("right" as const);
 
   // Text style at 2x for sharp rendering. Japanese-first font stack so
   // Bridge bubbles (えむ's message text is usually 日本語) don't hit the
@@ -206,12 +211,20 @@ function Bubble({ content, yOffset }: BubbleProps): ReactNode {
     [],
   );
 
+  // Horizontal offset: positive = right of agent, negative = left
+  const xOffset = side === "right" ? 45 : -45;
+  // Icon badge position: outer edge of bubble
+  const badgeX =
+    side === "right" ? -bWidth / 2 - 6 : bWidth / 2 + 6;
+
   return (
-    <pixiContainer y={yOffset} x={45}>
-      <pixiGraphics draw={(g) => drawBubble(g, bWidth, bHeight, type)} />
-      {/* Icon badge on top-left corner of bubble */}
+    <pixiContainer y={yOffset} x={xOffset}>
+      <pixiGraphics
+        draw={(g) => drawBubble(g, bWidth, bHeight, type, tailSide)}
+      />
+      {/* Icon badge on outer corner of bubble */}
       {iconEmoji && (
-        <pixiContainer x={-bWidth / 2 - 6} y={-bHeight + 6}>
+        <pixiContainer x={badgeX} y={-bHeight + 6}>
           <pixiGraphics draw={(g) => drawIconBadge(g, badgeRadius)} />
           <pixiContainer scale={0.5} x={0} y={1}>
             <pixiText
@@ -250,9 +263,10 @@ function AgentSpriteComponent({
   bubble,
   headsetTexture: _headsetTexture,
   sunglassesTexture,
+  characterTexture,
   renderBubble = true,
   renderLabel = true,
-  isTyping: _isTyping = false,
+  isTyping = false,
 }: AgentSpriteProps): ReactNode {
   // Memoize draw callback
   const drawCallback = useMemo(
@@ -260,23 +274,52 @@ function AgentSpriteComponent({
     [color],
   );
 
+  // ---------- Idle breathing animation for character sprites ----------
+  // Gentle sine-wave bob so the pixel art feels alive.  The amplitude is
+  // intentionally tiny (±1.5 px) — just enough to register subconsciously
+  // without looking like the character is jumping.  When `isTyping` is
+  // true the bob speeds up and the amplitude doubles to convey urgency.
+  const [breathOffset, setBreathOffset] = useState(0);
+  const breathTimeRef = useState(() => ({ t: Math.random() * Math.PI * 2 }))[0];
+
+  useTick((ticker) => {
+    if (!characterTexture) return; // capsule agents don't breathe
+    const speed = isTyping ? 0.12 : 0.04;
+    const amplitude = isTyping ? 3 : 1.5;
+    breathTimeRef.t += ticker.deltaTime * speed;
+    setBreathOffset(Math.sin(breathTimeRef.t) * amplitude);
+  });
+
   // Bubble offset for capsule rendering
   const bubbleOffset = -93;
 
   return (
     <pixiContainer x={position.x} y={position.y}>
-      {/* Agent capsule body */}
-      <pixiGraphics draw={drawCallback} />
-
-      {/* Sunglasses */}
-      {sunglassesTexture && (
+      {/* Character portrait PNG if available, otherwise capsule */}
+      {characterTexture ? (
         <pixiSprite
-          texture={sunglassesTexture}
-          anchor={0.5}
+          texture={characterTexture}
+          anchor={{ x: 0.5, y: 0.9 }}
           x={0}
-          y={-37}
-          scale={{ x: 0.036, y: 0.04 }}
+          y={breathOffset}
+          scale={0.65}
         />
+      ) : (
+        <>
+          {/* Fallback: Agent capsule body */}
+          <pixiGraphics draw={drawCallback} />
+
+          {/* Sunglasses (only on capsule fallback) */}
+          {sunglassesTexture && (
+            <pixiSprite
+              texture={sunglassesTexture}
+              anchor={0.5}
+              x={0}
+              y={-37}
+              scale={{ x: 0.036, y: 0.04 }}
+            />
+          )}
+        </>
       )}
 
       {/* Agent name if present - hide when in elevator or when renderLabel is false.

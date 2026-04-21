@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the Office canvas with 14 Commander Bridge sprites.
+"""Seed the Office canvas with 12 Commander Bridge sprites.
 
 Mirrors what the real Commander Bridge
 (``scripts/commander_bridge_public/app/office_client.py``) posts to
@@ -7,7 +7,7 @@ Mirrors what the real Commander Bridge
 but without needing the VPS. Useful for:
 
 * **Local smoke test.** Boot the Office backend + frontend, run this
-  script, verify all 14 sprites render with Japanese labels, emoji
+  script, verify all 12 sprites render with Japanese labels, emoji
   badges, and dept-specific colors.
 * **Branding screenshot.** Populates the canvas with a known, visually
   consistent lineup so FB/press screenshots don't catch it mid-empty.
@@ -59,7 +59,7 @@ from typing import Any
 
 
 # ---------------------------------------------------------------------------
-# Canonical 14-dept persona lineup
+# Canonical 12-dept persona lineup
 # ---------------------------------------------------------------------------
 # Inlined on purpose — the Bridge's ``personas.py`` lives in a different
 # repo (empire_monitor) and importing across repo boundaries would make
@@ -85,8 +85,6 @@ PERSONAS: list[Persona] = [
     Persona("new_biz", "🚀", "新規事業開発部", "タダシ", "#1ABC9C"),
     Persona("phil", "🎓", "フィルコンサル事業部", "フィル", "#F1C40F"),
     Persona("ai_inv", "💰", "AI投資エージェント部", "アキ", "#27AE60"),
-    Persona("real_estate", "🏠", "不動産事業部", "アイリ", "#16A085"),
-    Persona("origin", "🪞", "コピーロボット部", "エム吉", "#BDC3C7"),
     Persona("security", "🔒", "セキュリティ体制整備", "モード", "#34495E"),
     Persona("doradora_sns", "📱", "どらどらSNS運用", "ソラ", "#E91E63"),
 ]
@@ -103,11 +101,9 @@ DEMO_MESSAGES: dict[str, str] = {
     "design": "メカニック基調のスライド、14部門分のキャラ差分を詰める。",
     "advertising": "FB広告コンセプト3本、CPA想定とあわせて共有済み。",
     "sales": "商談プレイブック、3件分けて出した。火曜にデモ1本あり。",
-    "new_biz": "不動産AI秘書、フェーズ1の導線3案に整理したよ。",
+    "new_biz": "新規事業3案、市場規模と参入タイミングの比較表まとめた。",
     "phil": "受講生のMD、今週7本到着。業種別タグ貼って保管した。",
     "ai_inv": "新プロトコルAPY、昨日比+4.2%。Telegramで速報流す。",
-    "real_estate": "アイリBot、今朝の物件3件をまりこさんへ橋渡し。",
-    "origin": "えむ節のQ&A、Obsidianに追記。Xネタ候補5本ピック。",
     "security": "50MB超ファイル、commit前に検知してブロックした件あり。",
     "doradora_sns": "どらどら X、過去30件の重複チェック通過。下書き2本。",
 }
@@ -178,7 +174,7 @@ def post_event(
 # ---------------------------------------------------------------------------
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Seed Office canvas with 14 Commander Bridge sprites.",
+        description="Seed Office canvas with 12 Commander Bridge sprites.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
@@ -194,7 +190,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--depts",
         default="",
-        help="Comma-separated dept_ids to emit (default: all 14).",
+        help="Comma-separated dept_ids to emit (default: all 12).",
     )
     p.add_argument(
         "--kind",

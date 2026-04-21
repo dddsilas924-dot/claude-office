@@ -33,8 +33,8 @@ import { isBridgeEventPayload } from "@/types";
 // when the bridge is idle (most of the time). Ten seconds is the coarsest
 // interval that still feels "live enough" in informal playtesting.
 
-const BRIDGE_AGENT_TTL_MS = 90_000;
-const BRIDGE_PRUNE_INTERVAL_MS = 10_000;
+const BRIDGE_AGENT_TTL_MS = 600_000; // 10 min — long enough to stay visible between commands
+const BRIDGE_PRUNE_INTERVAL_MS = 30_000;
 
 // ============================================================================
 // TYPES
@@ -303,6 +303,7 @@ export function useWebSocketEvents({
     (event: MessageEvent) => {
       try {
         const message: WebSocketMessage = JSON.parse(event.data);
+        console.log("[WS] incoming type:", message.type);
 
         // Validate session ID for messages that include it (except session_deleted which is global)
         if (
@@ -429,11 +430,13 @@ export function useWebSocketEvents({
               );
               break;
             }
-            // Scope bridge sprites to the current session so switching
-            // sessions doesn't leak old dept sprites into the new canvas.
-            if (bridge.session_id !== currentSessionIdRef.current) {
-              break;
-            }
+            // Bridge events from Commander Bridge are system-wide;
+            // display them regardless of which session is active.
+            console.log(
+              "[WS] external_event received:",
+              bridge.dept_id,
+              bridge.display_name,
+            );
             useGameStore.getState().applyBridgeEvent(bridge);
             break;
           }

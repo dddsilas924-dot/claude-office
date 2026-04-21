@@ -16,13 +16,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { BridgeEventPayload } from "../src/types";
 import { isBridgeEventPayload } from "../src/types";
-import {
-  bridgeAgentPosition,
-  BRIDGE_ROW_ORIGIN,
-  BRIDGE_ROW_SPACING_X,
-  BRIDGE_ROW_SPACING_Y,
-  BRIDGE_ROW_MAX_PER_ROW,
-} from "../src/constants/positions";
+import { bridgeAgentPosition } from "../src/constants/positions";
+
+// Desk-grid constants (mirrored from positions.ts / DeskGrid.tsx)
+const DESK_ORIGIN = { x: 256, y: 408 };
+const DESK_SPACING_X = 256;
+const DESK_SPACING_Y = 192;
+const DESK_COLS = 4;
 import { useGameStore } from "../src/stores/gameStore";
 
 // ─── Test helpers ──────────────────────────────────────────────────────
@@ -108,37 +108,37 @@ describe("isBridgeEventPayload", () => {
 
 // ─── bridgeAgentPosition ──────────────────────────────────────────────
 
-describe("bridgeAgentPosition", () => {
-  it("places index 0 at the row origin", () => {
+describe("bridgeAgentPosition (desk-grid aligned)", () => {
+  it("places index 0 at the first desk position", () => {
     expect(bridgeAgentPosition(0)).toEqual({
-      x: BRIDGE_ROW_ORIGIN.x,
-      y: BRIDGE_ROW_ORIGIN.y,
+      x: DESK_ORIGIN.x,
+      y: DESK_ORIGIN.y,
     });
   });
 
-  it("advances columns horizontally by BRIDGE_ROW_SPACING_X", () => {
+  it("advances columns horizontally by desk spacing", () => {
     expect(bridgeAgentPosition(3)).toEqual({
-      x: BRIDGE_ROW_ORIGIN.x + 3 * BRIDGE_ROW_SPACING_X,
-      y: BRIDGE_ROW_ORIGIN.y,
+      x: DESK_ORIGIN.x + 3 * DESK_SPACING_X,
+      y: DESK_ORIGIN.y,
     });
   });
 
-  it("wraps to the next row at BRIDGE_ROW_MAX_PER_ROW", () => {
+  it("wraps to the next row at 4 columns", () => {
     // Last slot of row 0.
-    expect(bridgeAgentPosition(BRIDGE_ROW_MAX_PER_ROW - 1)).toEqual({
-      x: BRIDGE_ROW_ORIGIN.x + (BRIDGE_ROW_MAX_PER_ROW - 1) * BRIDGE_ROW_SPACING_X,
-      y: BRIDGE_ROW_ORIGIN.y,
+    expect(bridgeAgentPosition(DESK_COLS - 1)).toEqual({
+      x: DESK_ORIGIN.x + (DESK_COLS - 1) * DESK_SPACING_X,
+      y: DESK_ORIGIN.y,
     });
     // First slot of row 1 resets column, advances row.
-    expect(bridgeAgentPosition(BRIDGE_ROW_MAX_PER_ROW)).toEqual({
-      x: BRIDGE_ROW_ORIGIN.x,
-      y: BRIDGE_ROW_ORIGIN.y + BRIDGE_ROW_SPACING_Y,
+    expect(bridgeAgentPosition(DESK_COLS)).toEqual({
+      x: DESK_ORIGIN.x,
+      y: DESK_ORIGIN.y + DESK_SPACING_Y,
     });
     // Arbitrary index deep into a later row.
-    const deepIndex = BRIDGE_ROW_MAX_PER_ROW * 2 + 4;
+    const deepIndex = DESK_COLS * 2 + 2;
     expect(bridgeAgentPosition(deepIndex)).toEqual({
-      x: BRIDGE_ROW_ORIGIN.x + 4 * BRIDGE_ROW_SPACING_X,
-      y: BRIDGE_ROW_ORIGIN.y + 2 * BRIDGE_ROW_SPACING_Y,
+      x: DESK_ORIGIN.x + 2 * DESK_SPACING_X,
+      y: DESK_ORIGIN.y + 2 * DESK_SPACING_Y,
     });
   });
 });

@@ -292,7 +292,7 @@ async def _broadcast_external(payload: ExternalEventPayload) -> None:
         },
     }
     try:
-        await manager.broadcast(wire, payload.session_id)
+        await manager.broadcast_all(wire)
     except Exception:
         log.exception(
             "external_event broadcast failed session_id=%s dept=%s kind=%s",
