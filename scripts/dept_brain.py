@@ -9,6 +9,9 @@ discord_bot.py から呼ばれる独立モジュール。
 2. generate_autonomous() - 自発活動の内容生成
 3. meeting_turn()     - 会議の1ターン発言生成
 4. is_deliverable()   - 成果物判定
+5. generate_deliverable_file() - 成果物をMDファイルとして保存
+6. generate_report_html()      - MDテキストをHTMLに変換・保存
+7. generate_summary_image()    - テキスト要約を画像化・保存
 
 安全設計:
 - レートリミット（10回/分）
@@ -19,14 +22,24 @@ discord_bot.py から呼ばれる独立モジュール。
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import html as html_module
+import io
 import json
 import logging
 import os
 import re
+import textwrap
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
 
 import anthropic
 
@@ -364,32 +377,41 @@ class DeptBrain:
 
         async with self._state_write_lock:
             try:
-                with state_path.open(encoding="utf-8") as f:
-                    data = json.load(f)
+                # fcntl.flock でプロセス間排他制御（他プロセスの上書きを防止）
+                lock_path = state_path.with_suffix(".lock")
+                with open(lock_path, "w") as lock_file:
+                    fcntl.flock(lock_file, fcntl.LOCK_EX)
+                    try:
+                        with state_path.open(encoding="utf-8") as f:
+                            data = json.load(f)
 
-                dept_data = data.get("departments", {}).get(key)
-                if dept_data is None:
-                    log.debug("shared_state に部門 %s が存在しないため書き戻しスキップ", key)
-                    return
+                        dept_data = data.get("departments", {}).get(key)
+                        if dept_data is None:
+                            log.debug("shared_state に部門 %s が存在しないため書き戻しスキップ", key)
+                            return
 
-                # updated_at を更新
-                dept_data["updated_at"] = now_jst
+                        # updated_at を更新
+                        dept_data["updated_at"] = now_jst
 
-                # Discord活動ログを追記
-                activity_entry = f"{now_jst} [{label}]"
-                if response_summary:
-                    # 最初の50文字だけ記録（長すぎるとJSONが肥大化する）
-                    short = response_summary[:50].replace("\n", " ")
-                    activity_entry += f" {short}"
+                        # Discord活動ログを追記
+                        activity_entry = f"{now_jst} [{label}]"
+                        if response_summary:
+                            # 最初の50文字だけ記録（長すぎるとJSONが肥大化する）
+                            short = response_summary[:50].replace("\n", " ")
+                            activity_entry += f" {short}"
 
-                # discord_activity_log に最新5件を保持（FIFO）
-                activity_log = dept_data.get("discord_activity_log", [])
-                activity_log.append(activity_entry)
-                dept_data["discord_activity_log"] = activity_log[-5:]
+                        # discord_activity_log に最新5件を保持（FIFO）
+                        activity_log = dept_data.get("discord_activity_log", [])
+                        activity_log.append(activity_entry)
+                        dept_data["discord_activity_log"] = activity_log[-5:]
 
-                # JSONを書き戻し
-                with state_path.open("w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                        # JSONを書き戻し（一時ファイル→リネームで原子的書き込み）
+                        tmp_path = state_path.with_suffix(".tmp")
+                        with tmp_path.open("w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        tmp_path.replace(state_path)
+                    finally:
+                        fcntl.flock(lock_file, fcntl.LOCK_UN)
 
                 log.info(
                     "shared_state 書き戻し完了: %s/%s → %s (log=%d件)",
@@ -481,6 +503,276 @@ class DeptBrain:
         ):
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # 成果物ファイル生成
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _deliverable_dir() -> Path:
+        """成果物保存ディレクトリを取得し、なければ作成する。"""
+        d = Path("/tmp/claude_office_deliverables")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @staticmethod
+    def _jst_stamp() -> tuple[str, str]:
+        """JST現在時刻の (YYYYMMDD, HHMM) を返す。"""
+        jst = timezone(timedelta(hours=9))
+        now = datetime.now(jst)
+        return now.strftime("%Y%m%d"), now.strftime("%H%M")
+
+    def generate_deliverable_file(self, text: str, dept_id: str) -> Path | None:
+        """
+        テキストからMDファイルを生成して /tmp/claude_office_deliverables/ に保存する。
+
+        Args:
+            text: 保存するテキスト（Markdown形式）
+            dept_id: 部門ID（ファイル名に使用）
+
+        Returns:
+            保存したファイルのパス。失敗時は None。
+        """
+        if not text:
+            return None
+        try:
+            date_str, time_str = self._jst_stamp()
+            filename = f"成果物_{dept_id}_{date_str}_{time_str}.md"
+            out_path = self._deliverable_dir() / filename
+            out_path.write_text(text, encoding="utf-8")
+            log.info("成果物MDファイル生成: %s (%d bytes)", out_path, len(text.encode("utf-8")))
+            return out_path
+        except OSError as exc:
+            log.error("generate_deliverable_file 失敗: %s", exc)
+            return None
+
+    def generate_report_html(self, text: str, dept_id: str) -> Path | None:
+        """
+        MDテキストをシンプルなHTMLに変換して保存する。
+        BIZUDPGothicフォント、ダークテーマ付き。
+
+        Args:
+            text: 変換するMarkdownテキスト
+            dept_id: 部門ID（ファイル名・タイトルに使用）
+
+        Returns:
+            保存したHTMLファイルのパス。失敗時は None。
+        """
+        if not text:
+            return None
+        try:
+            date_str, time_str = self._jst_stamp()
+
+            # Markdownをシンプルなhtmlへ変換（markdownライブラリがあれば使用）
+            try:
+                import markdown as md_lib
+                body_html = md_lib.markdown(
+                    text,
+                    extensions=["tables", "fenced_code"],
+                )
+            except ImportError:
+                # フォールバック: 最低限の変換のみ
+                escaped = html_module.escape(text)
+                lines = escaped.split("\n")
+                converted = []
+                for line in lines:
+                    if line.startswith("### "):
+                        converted.append(f"<h3>{line[4:]}</h3>")
+                    elif line.startswith("## "):
+                        converted.append(f"<h2>{line[3:]}</h2>")
+                    elif line.startswith("# "):
+                        converted.append(f"<h1>{line[2:]}</h1>")
+                    elif line.startswith("- ") or line.startswith("* "):
+                        converted.append(f"<li>{line[2:]}</li>")
+                    elif line.strip() == "":
+                        converted.append("<br>")
+                    else:
+                        converted.append(f"<p>{line}</p>")
+                body_html = "\n".join(converted)
+
+            title = f"{dept_id} レポート {date_str}_{time_str}"
+            html_content = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html_module.escape(title)}</title>
+  <style>
+    @font-face {{
+      font-family: 'BIZUDPGothic';
+      src: url('/Users/satts924/Downloads/empire_monitor_full_20260321/reports/assets/fonts/japanese/BIZUDPGothic-Regular.ttf');
+      font-weight: normal;
+    }}
+    @font-face {{
+      font-family: 'BIZUDPGothic';
+      src: url('/Users/satts924/Downloads/empire_monitor_full_20260321/reports/assets/fonts/japanese/BIZUDPGothic-Bold.ttf');
+      font-weight: bold;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: 'BIZUDPGothic', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+      font-size: 16px;
+      line-height: 1.8;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }}
+    h1 {{ font-size: 2rem; color: #7ec8e3; border-bottom: 2px solid #7ec8e3; padding-bottom: 0.5rem; margin: 1.5rem 0 1rem; }}
+    h2 {{ font-size: 1.5rem; color: #a8d8ea; margin: 1.5rem 0 0.8rem; }}
+    h3 {{ font-size: 1.2rem; color: #c8e6f5; margin: 1.2rem 0 0.6rem; }}
+    p {{ margin: 0.8rem 0; }}
+    li {{ margin: 0.3rem 0 0.3rem 1.5rem; }}
+    ul, ol {{ margin: 0.5rem 0; }}
+    code {{
+      font-family: 'Courier New', monospace;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.9rem;
+      color: #e94560;
+    }}
+    pre {{
+      background: #16213e;
+      border: 1px solid #0f3460;
+      padding: 1rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }}
+    pre code {{ background: none; border: none; color: #e0e0e0; padding: 0; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
+    th {{ background: #0f3460; color: #7ec8e3; padding: 0.6rem 1rem; text-align: left; }}
+    td {{ border: 1px solid #0f3460; padding: 0.5rem 1rem; }}
+    tr:nth-child(even) td {{ background: #16213e; }}
+    blockquote {{
+      border-left: 4px solid #7ec8e3;
+      padding: 0.5rem 1rem;
+      margin: 1rem 0;
+      color: #b0b0b0;
+      font-style: italic;
+    }}
+    .meta {{
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #0f3460;
+    }}
+    hr {{ border: none; border-top: 1px solid #0f3460; margin: 1.5rem 0; }}
+  </style>
+</head>
+<body>
+  <div class="meta">部門: {html_module.escape(dept_id)} | 生成日時: {date_str[:4]}-{date_str[4:6]}-{date_str[6:]} {time_str[:2]}:{time_str[2:]}</div>
+  {body_html}
+</body>
+</html>"""
+
+            filename = f"レポート_{dept_id}_{date_str}_{time_str}.html"
+            out_path = self._deliverable_dir() / filename
+            out_path.write_text(html_content, encoding="utf-8")
+            log.info("レポートHTMLファイル生成: %s (%d bytes)", out_path, len(html_content.encode("utf-8")))
+            return out_path
+        except OSError as exc:
+            log.error("generate_report_html 失敗: %s", exc)
+            return None
+        except Exception as exc:
+            log.error("generate_report_html 予期しないエラー: %s", exc)
+            return None
+
+    def generate_summary_image(self, text: str, dept_id: str) -> Path | None:
+        """
+        テキストの要約を画像化（PIL/Pillow使用）。
+        800x400px、ダーク背景、白文字。
+
+        Args:
+            text: 画像化するテキスト（先頭部分を使用）
+            dept_id: 部門ID（ファイル名・ヘッダーに使用）
+
+        Returns:
+            保存したPNGファイルのパス。PILがない/失敗時は None。
+        """
+        if not _PIL_AVAILABLE:
+            log.warning("generate_summary_image: PIL/Pillowが未インストールのためスキップ")
+            return None
+        if not text:
+            return None
+
+        try:
+            date_str, time_str = self._jst_stamp()
+            W, H = 800, 400
+
+            # キャンバス生成
+            img = Image.new("RGB", (W, H), color=(26, 26, 46))  # #1a1a2e
+            draw = ImageDraw.Draw(img)
+
+            # フォント読み込み（BIZUDPGothic優先 → デフォルトフォールバック）
+            font_path = Path(
+                "/Users/satts924/Downloads/empire_monitor_full_20260321"
+                "/reports/assets/fonts/japanese/BIZUDPGothic-Regular.ttf"
+            )
+            try:
+                font_title = ImageFont.truetype(str(font_path), 22) if font_path.is_file() else ImageFont.load_default()
+                font_body  = ImageFont.truetype(str(font_path), 16) if font_path.is_file() else ImageFont.load_default()
+                font_meta  = ImageFont.truetype(str(font_path), 13) if font_path.is_file() else ImageFont.load_default()
+            except (OSError, IOError):
+                font_title = ImageFont.load_default()
+                font_body  = ImageFont.load_default()
+                font_meta  = ImageFont.load_default()
+
+            # 上部アクセントライン
+            draw.rectangle([0, 0, W, 4], fill=(126, 200, 227))  # #7ec8e3
+
+            # 部門ヘッダー
+            header = f"{dept_id}  |  {date_str[:4]}-{date_str[4:6]}-{date_str[6:]} {time_str[:2]}:{time_str[2:]}"
+            draw.text((24, 18), header, font=font_meta, fill=(126, 200, 227))
+
+            # セパレータ
+            draw.line([24, 46, W - 24, 46], fill=(15, 52, 96), width=1)
+
+            # 本文（先頭380文字を折り返して表示）
+            # Markdownマーカー（#, *, -, 【 等）は簡易除去
+            clean = re.sub(r"[#*`>~\[\]]+", "", text).strip()
+            # 複数空行を1行に
+            clean = re.sub(r"\n{2,}", "\n", clean)
+            # 先頭380文字
+            snippet = clean[:380]
+
+            # textwrapで折り返し（全角28文字/行が800px時の目安）
+            wrapped_lines: list[str] = []
+            for raw_line in snippet.splitlines():
+                if raw_line.strip():
+                    wrapped_lines.extend(textwrap.wrap(raw_line, width=38) or [raw_line])
+                else:
+                    wrapped_lines.append("")
+
+            y = 58
+            line_h = 26
+            max_lines = (H - 80) // line_h  # 最大表示行数
+            for i, line in enumerate(wrapped_lines[:max_lines]):
+                draw.text((24, y + i * line_h), line, font=font_body, fill=(224, 224, 224))
+
+            # 末尾ラベル
+            label = "Claude Office 成果物サマリー"
+            draw.text((24, H - 24), label, font=font_meta, fill=(102, 102, 102))
+
+            # 下部アクセントライン
+            draw.rectangle([0, H - 4, W, H], fill=(126, 200, 227))
+
+            filename = f"サマリー_{dept_id}_{date_str}_{time_str}.png"
+            out_path = self._deliverable_dir() / filename
+            img.save(str(out_path), format="PNG")
+            log.info("サマリー画像ファイル生成: %s (%dx%d)", out_path, W, H)
+            return out_path
+
+        except OSError as exc:
+            log.error("generate_summary_image 保存失敗: %s", exc)
+            return None
+        except Exception as exc:
+            log.error("generate_summary_image 予期しないエラー: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # 制御

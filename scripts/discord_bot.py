@@ -711,6 +711,164 @@ def _format_attachment_summary(metadata: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 部門間メディア共有 (クロスポスト機能)
+# ---------------------------------------------------------------------------
+
+# キーワード → 転送先部門チャンネル名 のマッピング
+_CROSS_POST_KEYWORDS: list[tuple[list[str], str]] = [
+    (["台本", "コンテンツ", "動画企画", "シナリオ"], "コンテンツ部"),
+    (["LP", "デザイン", "スライド", "バナー", "ビジュアル"], "デザイン部"),
+    (["コピー", "広告文", "ライティング", "メルマガ", "セールスレター"], "ライティング部"),
+    (["リサーチ", "調査", "市場分析", "ソースチェーン", "競合"], "リサーチ部"),
+    (["広告", "キャンペーン", "FB広告", "Instagram広告", "A/Bテスト"], "広告部"),
+    (["営業", "商談", "リード", "クロージング", "プレイブック"], "営業部"),
+    (["セキュリティ", "脆弱性", "CVE", "依存パッケージ", "インシデント"], "セキュリティ部"),
+]
+
+# クロスポスト先の最大数 (スパム防止)
+_CROSS_POST_MAX_DEPTS = 3
+
+# 重複防止の時間窓 (秒)
+_CROSS_POST_DEDUP_WINDOW = 300  # 5分
+
+
+class SharedMediaTracker:
+    """
+    部門間クロスポストの重複送信を防止するトラッカー。
+    同じ (送信元部門, 転送先部門, テキスト先頭100文字) の組み合わせを
+    5分以内に再送しない。メモリ内辞書のみで管理 (永続化不要)。
+    """
+
+    def __init__(self) -> None:
+        # key: (src_dept_id, dst_channel_name, text_hash) → unix timestamp
+        self._seen: dict[tuple[str, str, str], float] = {}
+
+    def _make_key(self, src_dept_id: str, dst_channel_name: str, text: str) -> tuple[str, str, str]:
+        # テキストの先頭100文字を識別子として使う
+        text_sig = text[:100].strip()
+        return (src_dept_id, dst_channel_name, text_sig)
+
+    def is_duplicate(self, src_dept_id: str, dst_channel_name: str, text: str) -> bool:
+        """直近5分以内に同じ内容を送信済みなら True を返す。"""
+        key = self._make_key(src_dept_id, dst_channel_name, text)
+        now = time.time()
+        last_sent = self._seen.get(key)
+        if last_sent is not None and (now - last_sent) < _CROSS_POST_DEDUP_WINDOW:
+            return True
+        return False
+
+    def mark_sent(self, src_dept_id: str, dst_channel_name: str, text: str) -> None:
+        """送信済みとして記録する。"""
+        key = self._make_key(src_dept_id, dst_channel_name, text)
+        self._seen[key] = time.time()
+        # 古いエントリを掃除 (1000件超えたら期限切れを削除)
+        if len(self._seen) > 1000:
+            cutoff = time.time() - _CROSS_POST_DEDUP_WINDOW
+            self._seen = {k: v for k, v in self._seen.items() if v > cutoff}
+
+
+# グローバルインスタンス (Bot 起動後に使い回す)
+_shared_media_tracker = SharedMediaTracker()
+
+
+async def cross_post_to_departments(
+    guild: discord.Guild,
+    src_dept_id: str,
+    src_channel_name: str,
+    text: str,
+) -> int:
+    """
+    成果物テキストのキーワードを判定して、関連部門のチャンネルにクロスポストする。
+
+    Args:
+        guild: Discord Guild オブジェクト
+        src_dept_id: 送信元の部門ID
+        src_channel_name: 送信元チャンネル名 (embed の「続きは」リンク用)
+        text: クロスポストする成果物テキスト
+
+    Returns:
+        実際に送信した部門数
+    """
+    # 送信元チャンネルと同じ部門名を転送先から除外するための逆引き
+    src_channel_dept_name = RELAY_DEPT_TO_CHANNEL.get(src_dept_id, "")
+
+    # キーワードで転送先を決定
+    matched_channels: list[str] = []
+    for keywords, dst_channel_name in _CROSS_POST_KEYWORDS:
+        if dst_channel_name == src_channel_dept_name:
+            continue  # 自分自身には送らない
+        for kw in keywords:
+            if kw in text:
+                if dst_channel_name not in matched_channels:
+                    matched_channels.append(dst_channel_name)
+                break  # 1部門につき1ヒットで十分
+
+    # 最大3部門に絞る
+    matched_channels = matched_channels[:_CROSS_POST_MAX_DEPTS]
+
+    if not matched_channels:
+        return 0
+
+    # 送信元キャラ情報
+    src_char = CHAR_BY_DEPT.get(src_dept_id, CHAR_BY_DEPT.get("bridge"))
+    if not src_char:
+        return 0
+
+    src_display = src_char["display_name"]
+    src_color = src_char["discord_color"]
+
+    # 転送本文: 最初の200文字 + 続きはリンク
+    snippet = text[:200]
+    if len(text) > 200:
+        snippet += "..."
+    footer_note = f"続きは #{src_channel_name} チャンネルで確認"
+
+    sent_count = 0
+    for dst_channel_name in matched_channels:
+        # 重複チェック
+        if _shared_media_tracker.is_duplicate(src_dept_id, dst_channel_name, text):
+            log.debug(
+                "クロスポストスキップ (重複): %s → %s", src_dept_id, dst_channel_name
+            )
+            continue
+
+        # 転送先チャンネルを取得
+        dst_channel_id = CHANNELS.get(dst_channel_name)
+        if not dst_channel_id:
+            log.debug("クロスポスト先チャンネルIDなし: %s", dst_channel_name)
+            continue
+
+        dst_ch = guild.get_channel(dst_channel_id)
+        if not isinstance(dst_ch, discord.TextChannel):
+            log.debug("クロスポスト先チャンネルが TextChannel でない: %s", dst_channel_name)
+            continue
+
+        # Embed 作成
+        embed = discord.Embed(
+            title=f"📨 {src_display} からの共有",
+            description=snippet,
+            color=src_color,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="参照元", value=footer_note, inline=False)
+        embed.set_footer(text=f"部門間共有 | ミスターDオフィス × 伝書鳩")
+
+        try:
+            await dst_ch.send(embed=embed)
+            _shared_media_tracker.mark_sent(src_dept_id, dst_channel_name, text)
+            sent_count += 1
+            log.info(
+                "クロスポスト送信: %s → %s", src_dept_id, dst_channel_name
+            )
+        except discord.Forbidden:
+            log.warning("権限不足: クロスポスト先 %s への送信失敗", dst_channel_name)
+        except discord.HTTPException as exc:
+            log.error("クロスポスト送信エラー (%s): %s", dst_channel_name, exc)
+
+    return sent_count
+
+
+# ---------------------------------------------------------------------------
 # TASK-03: 14部門中継パネル — RelayPanelView (永続 View)
 # ---------------------------------------------------------------------------
 
@@ -1257,6 +1415,23 @@ class CommanderBridgeBot(discord.Client):
             log.info("成果物保管 (ファイル付き): %s → %s [%s]", dept_id, storage_name, filename)
         except discord.HTTPException as exc:
             log.error("成果物保管エラー: %s", exc)
+
+        # クロスポスト: 成果物を関連部門に共有 (is_relay=True の場合はえむ直接指示なので除外)
+        if not is_relay and self._guild is not None:
+            src_ch_name = (
+                source_message.channel.name
+                if hasattr(source_message.channel, "name")
+                else RELAY_DEPT_TO_CHANNEL.get(dept_id, "")
+            )
+            asyncio.create_task(
+                cross_post_to_departments(
+                    guild=self._guild,
+                    src_dept_id=dept_id,
+                    src_channel_name=src_ch_name,
+                    text=text,
+                ),
+                name=f"cross_post_{dept_id}",
+            )
 
     # TASK-02: サーバー名変更 (冪等)
     async def _ensure_guild_name(self, target_name: str) -> None:
