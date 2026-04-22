@@ -16,7 +16,7 @@ Canvas 上に生き続けさせ、Discord チャンネルのメッセージを C
 - 14部門パネル: えむ（どらどら）専用の指示ツール
 
 成果物:
-- えむ指示の成果物 → 📦えむの成果物
+- えむ指示の成果物 → 📦ドラの成果物
 - 部門自律の成果物 → 📦部門の成果物
 
 セッション連携:
@@ -144,7 +144,10 @@ CHANNELS: dict[str, int] = {
     "会議室": 1495637503175168092,
     "司令塔ログ": 1495637504580386978,
     "一般": 1494899622253170781,
-    # 保管庫チャンネルは on_ready で動的追加される
+    # 保管庫・ダッシュボード・日報チャンネルは on_ready で動的追加される
+    # 改善6・7: 以下は on_ready で自動作成後にIDが追加される
+    # "📊ステータス": (動的)
+    # "📝日報": (動的)
 }
 
 # チャンネル ID → 部門名 の逆引き
@@ -263,6 +266,43 @@ CHARACTERS: list[dict[str, Any]] = [
         "icon": "🛡️",
         "role": "セキュリティ担当",
     },
+    # 改善2: 不足キャラ4件追加
+    {
+        "dept_id": "takumi_x",
+        "display_name": "🎯 タクミ（X運用）",
+        "agent_color": "#E91E63",
+        "model": "sonnet",
+        "discord_color": 0xE91E63,
+        "icon": "🎯",
+        "role": "X運用部長",
+    },
+    {
+        "dept_id": "real_estate",
+        "display_name": "🏠 アイリ（不動産）",
+        "agent_color": "#795548",
+        "model": "sonnet",
+        "discord_color": 0x795548,
+        "icon": "🏠",
+        "role": "不動産部長",
+    },
+    {
+        "dept_id": "doradora_sns",
+        "display_name": "📱 どらどらSNS",
+        "agent_color": "#FF9800",
+        "model": "sonnet",
+        "discord_color": 0xFF9800,
+        "icon": "📱",
+        "role": "どらどらSNS担当",
+    },
+    {
+        "dept_id": "origin_story",
+        "display_name": "🤖 コピーロボット",
+        "agent_color": "#607D8B",
+        "model": "haiku",
+        "discord_color": 0x607D8B,
+        "icon": "🤖",
+        "role": "コピーロボット担当",
+    },
 ]
 
 # dept_id → キャラ情報 の辞書
@@ -276,14 +316,14 @@ CHANNEL_TO_DEPT_ID: dict[str, str] = {
     "ライティング部": "writing",
     "リサーチ部": "research",
     "新規事業部": "new_biz",
-    "コピーロボット部": "bridge",
+    "コピーロボット部": "origin_story",
     "営業部": "sales",
     "広告部": "advertising",
     "フィルコンサル部": "phil_consulting",
-    "タクミX部": "bridge",
+    "タクミX部": "takumi_x",
     "AI投資部": "ai_investment",
-    "不動産部": "bridge",
-    "どらどらSNS部": "bridge",
+    "不動産部": "real_estate",
+    "どらどらSNS部": "doradora_sns",
     "セキュリティ部": "security",
     "会議室": "commander",
     "司令塔ログ": "commander",
@@ -303,6 +343,11 @@ RELAY_DEPT_TO_CHANNEL: dict[str, str] = {
     "ai_investment": "AI投資部",
     "security": "セキュリティ部",
     "bridge": "コピーロボット部",
+    # 改善2: 不足4部門のルーティング追加
+    "takumi_x": "タクミX部",
+    "real_estate": "不動産部",
+    "doradora_sns": "どらどらSNS部",
+    "origin_story": "コピーロボット部",
 }
 
 # ハートビートで使うステータスメッセージ (循環してマンネリを防ぐ)
@@ -371,6 +416,67 @@ HEARTBEAT_MESSAGES: dict[str, list[str]] = {
 
 # ハートビートカウンター (メッセージをローテーションする)
 _heartbeat_count: dict[str, int] = {c["dept_id"]: 0 for c in CHARACTERS}
+
+# ---------------------------------------------------------------------------
+# 改善4: 14部門パネルのボタンスタイル定義
+# Discord は ButtonStyle 4色のみ: primary(blurple) / success(green) / secondary(grey) / danger(red)
+# ---------------------------------------------------------------------------
+DEPT_BUTTON_STYLE: dict[str, discord.ButtonStyle] = {
+    "commander": discord.ButtonStyle.primary,
+    "research": discord.ButtonStyle.success,
+    "sales": discord.ButtonStyle.success,
+    "design": discord.ButtonStyle.success,
+    "content": discord.ButtonStyle.success,
+    "writing": discord.ButtonStyle.success,
+    "advertising": discord.ButtonStyle.success,
+    "ai_investment": discord.ButtonStyle.secondary,
+    "new_biz": discord.ButtonStyle.secondary,
+    "phil_consulting": discord.ButtonStyle.secondary,
+    "real_estate": discord.ButtonStyle.secondary,
+    "takumi_x": discord.ButtonStyle.danger,
+    "doradora_sns": discord.ButtonStyle.danger,
+    "origin_story": discord.ButtonStyle.danger,
+    "security": discord.ButtonStyle.primary,
+    "bridge": discord.ButtonStyle.secondary,
+}
+
+# ---------------------------------------------------------------------------
+# 改善3: チャンネルtopics定義
+# ---------------------------------------------------------------------------
+CHANNEL_TOPICS: dict[str, str] = {
+    "司令塔": "えむ → フィル → 各部門。全体指揮・戦略判断",
+    "司令塔ログ": "Bot自動ログ・イベント記録",
+    "会議室": "部門間連携・プロジェクト横断ミーティング",
+    "一般": "雑談・お知らせ・フリートーク",
+    "コンテンツ部": "台本・動画企画・3チャンネル管理",
+    "デザイン部": "LP・スライド・ビジュアル制作",
+    "ライティング部": "コピー・メルマガ・note・SNS文",
+    "リサーチ部": "市場調査・競合分析・ソースチェーン",
+    "営業部": "リード管理・商談・クロージング",
+    "広告部": "FB/Instagram/X広告運用・A/Bテスト",
+    "新規事業部": "新規事業企画・壁打ち",
+    "AI投資部": "DeFi・Bot・コピートレード",
+    "フィルコンサル部": "コンサル・カリキュラム・受講者対応",
+    "不動産部": "不動産AI秘書・スクール企画",
+    "タクミX部": "タクミX自動投稿・画像生成",
+    "どらどらSNS部": "えむ本人SNS運用",
+    "コピーロボット部": "えむペルソナ管理・口調分析",
+    "セキュリティ部": "セキュリティ監視・依存パッケージ管理",
+    "📊ステータス": "部門稼働状況ダッシュボード（自動更新）",
+    "📝日報": "日次レポート・daily_log連携（Phase 2）",
+}
+
+# ---------------------------------------------------------------------------
+# 改善1: カテゴリ自動整理の構造定義
+# ---------------------------------------------------------------------------
+CATEGORY_STRUCTURE: dict[str, list[str]] = {
+    "🏢 本部": ["司令塔", "司令塔ログ", "📊ステータス", "📝日報", "会議室", "一般"],
+    "💼 事業部門": ["コンテンツ部", "デザイン部", "ライティング部", "リサーチ部", "営業部", "広告部"],
+    "🚀 特殊部門": ["新規事業部", "AI投資部", "フィルコンサル部", "不動産部"],
+    "📣 SNS・ブランディング": ["タクミX部", "どらどらSNS部", "コピーロボット部"],
+    "🔒 管理": ["セキュリティ部"],
+    "📦 保管庫": ["📦ドラの成果物", "📦部門の成果物"],
+}
 
 # ---------------------------------------------------------------------------
 # HMAC 署名ユーティリティ
@@ -676,9 +782,11 @@ class RelayDeptButton(discord.ui.Button):
 
     def __init__(self, char: dict[str, Any]) -> None:
         dept_id = char["dept_id"]
+        # 改善4: 部門グループごとにボタン色を変える
+        style = DEPT_BUTTON_STYLE.get(dept_id, discord.ButtonStyle.secondary)
         super().__init__(
             label=char["display_name"],
-            style=discord.ButtonStyle.secondary,
+            style=style,
             custom_id=f"relay_{dept_id}",
             emoji=None,  # display_name に絵文字が含まれるため不要
         )
@@ -760,8 +868,17 @@ class CommanderBridgeBot(discord.Client):
             # TASK-02: サーバー名を「ミスターDオフィス」に変更 (冪等)
             await self._ensure_guild_name("ミスターDオフィス")
 
-            # TASK-05: 保管庫チャンネル自動作成
-            await self._ensure_storage_channels()
+            # 改善1・6・7: カテゴリ整理 + ステータス/日報チャンネル自動作成 (保管庫も統合)
+            await self._ensure_server_structure()
+
+            # 改善3: チャンネルtopic自動設定 (冪等)
+            await self._ensure_channel_topics()
+
+            # 改善5: ウェルカムembedをpinする (冪等)
+            await self._send_welcome_embed()
+
+            # 改善6: ステータスダッシュボードに静的部門一覧を投稿
+            await self._post_startup_status()
 
         # 最初に全キャラを Canvas に送信してプレゼンスを確立する
         await self._announce_online()
@@ -791,56 +908,222 @@ class CommanderBridgeBot(discord.Client):
         except discord.HTTPException as exc:
             log.error("サーバー名変更エラー: %s", exc)
 
-    # TASK-05: 保管庫チャンネル自動作成
-    async def _ensure_storage_channels(self) -> None:
+    # 改善1・6・7: カテゴリ整理 + 動的チャンネル自動作成 (保管庫統合版)
+    async def _ensure_server_structure(self) -> None:
         """
-        📦えむの成果物 / 📦部門の成果物 チャンネルが存在しなければ作成する。
-        カテゴリ「保管庫」がなければ作成してから入れる。
-        作成後は CHANNELS dict に動的追加する。
+        CATEGORY_STRUCTURE に従って全チャンネルを各カテゴリに整理する。
+        カテゴリが存在しなければ作成。チャンネルが存在しなければ作成。
+        既にカテゴリが正しければスキップ（冪等）。
+        権限不足時はlog.warningして続行。
         """
         if self._guild is None:
             return
 
-        storage_channels = ["📦えむの成果物", "📦部門の成果物"]
-        existing_names = {ch.name for ch in self._guild.channels}
+        # 既存カテゴリを名前 → CategoryChannel で引く
+        cat_by_name: dict[str, discord.CategoryChannel] = {
+            cat.name: cat for cat in self._guild.categories
+        }
+        # 既存チャンネル名セット（テキストチャンネル）
+        existing_text_channels: dict[str, discord.TextChannel] = {
+            ch.name: ch  # type: ignore[misc]
+            for ch in self._guild.channels
+            if isinstance(ch, discord.TextChannel)
+        }
 
-        # 保管庫カテゴリの確保
-        storage_category: discord.CategoryChannel | None = None
-        for cat in self._guild.categories:
-            if cat.name == "保管庫":
-                storage_category = cat
-                break
+        for cat_name, ch_names in CATEGORY_STRUCTURE.items():
+            # カテゴリ確保
+            category = cat_by_name.get(cat_name)
+            if category is None:
+                try:
+                    category = await self._guild.create_category(cat_name)
+                    cat_by_name[cat_name] = category
+                    log.info("カテゴリ「%s」を作成しました。", cat_name)
+                except discord.Forbidden:
+                    log.warning("権限不足: カテゴリ「%s」の作成をスキップします。", cat_name)
+                    continue
+                except discord.HTTPException as exc:
+                    log.error("カテゴリ作成エラー (%s): %s", cat_name, exc)
+                    continue
 
-        if storage_category is None:
-            try:
-                storage_category = await self._guild.create_category("保管庫")
-                log.info("カテゴリ「保管庫」を作成しました。")
-            except discord.Forbidden:
-                log.warning("権限不足: カテゴリ「保管庫」の作成をスキップします。")
-            except discord.HTTPException as exc:
-                log.error("カテゴリ作成エラー: %s", exc)
+            for ch_name in ch_names:
+                existing_ch = existing_text_channels.get(ch_name)
+                if existing_ch is not None:
+                    # 既存チャンネルのカテゴリが正しいか確認
+                    if existing_ch.category_id != category.id:
+                        try:
+                            await existing_ch.edit(category=category)
+                            log.info(
+                                "チャンネル「%s」をカテゴリ「%s」へ移動しました。",
+                                ch_name, cat_name,
+                            )
+                        except discord.Forbidden:
+                            log.warning(
+                                "権限不足: チャンネル「%s」のカテゴリ移動をスキップします。",
+                                ch_name,
+                            )
+                        except discord.HTTPException as exc:
+                            log.error("チャンネル移動エラー (%s): %s", ch_name, exc)
+                    # CHANNELS dict に動的追加（保管庫/ステータス/日報）
+                    if ch_name not in CHANNELS:
+                        CHANNELS[ch_name] = existing_ch.id
+                        CHANNEL_TO_DEPT[existing_ch.id] = ch_name
+                        log.info("チャンネル確認済み: %s (id=%d)", ch_name, existing_ch.id)
+                else:
+                    # チャンネル新規作成
+                    try:
+                        new_ch = await self._guild.create_text_channel(
+                            ch_name, category=category
+                        )
+                        CHANNELS[ch_name] = new_ch.id
+                        CHANNEL_TO_DEPT[new_ch.id] = ch_name
+                        existing_text_channels[ch_name] = new_ch
+                        log.info(
+                            "チャンネル「%s」を作成しました (id=%d, category=%s)。",
+                            ch_name, new_ch.id, cat_name,
+                        )
+                    except discord.Forbidden:
+                        log.warning(
+                            "権限不足: チャンネル「%s」の作成をスキップします。", ch_name
+                        )
+                    except discord.HTTPException as exc:
+                        log.error("チャンネル作成エラー (%s): %s", ch_name, exc)
 
-        for ch_name in storage_channels:
-            if ch_name in existing_names:
-                # 既存チャンネルの ID を CHANNELS に追加
-                existing_ch = discord.utils.get(self._guild.channels, name=ch_name)
-                if existing_ch is not None and ch_name not in CHANNELS:
-                    CHANNELS[ch_name] = existing_ch.id
-                    CHANNEL_TO_DEPT[existing_ch.id] = ch_name
-                    log.info("保管庫チャンネル確認済み: %s (id=%d)", ch_name, existing_ch.id)
+    # 改善3: チャンネルtopic自動設定 (冪等)
+    async def _ensure_channel_topics(self) -> None:
+        """
+        CHANNEL_TOPICS に従って各チャンネルの topic を設定する。
+        既に同一 topic ならスキップ（冪等）。
+        権限不足時はlog.warningして続行。
+        """
+        if self._guild is None:
+            return
+
+        for ch_name, topic in CHANNEL_TOPICS.items():
+            ch_id = CHANNELS.get(ch_name)
+            if ch_id is None:
+                continue
+            ch = self._guild.get_channel(ch_id)
+            if not isinstance(ch, discord.TextChannel):
+                continue
+            if ch.topic == topic:
                 continue
             try:
-                kwargs: dict[str, Any] = {}
-                if storage_category is not None:
-                    kwargs["category"] = storage_category
-                new_ch = await self._guild.create_text_channel(ch_name, **kwargs)
-                CHANNELS[ch_name] = new_ch.id
-                CHANNEL_TO_DEPT[new_ch.id] = ch_name
-                log.info("保管庫チャンネル作成: %s (id=%d)", ch_name, new_ch.id)
+                await ch.edit(topic=topic)
+                log.info("チャンネル「%s」のtopicを設定しました。", ch_name)
             except discord.Forbidden:
-                log.warning("権限不足: チャンネル %s の作成をスキップします。", ch_name)
+                log.warning("権限不足: チャンネル「%s」のtopic設定をスキップします。", ch_name)
             except discord.HTTPException as exc:
-                log.error("チャンネル作成エラー (%s): %s", ch_name, exc)
+                log.error("チャンネルtopic設定エラー (%s): %s", ch_name, exc)
+
+    # 改善5: ウェルカムembedを「一般」チャンネルにpin (冪等)
+    async def _send_welcome_embed(self) -> None:
+        """
+        「一般」チャンネルに組織図embedをpinする。
+        既にBotが送ったpinメッセージがあればスキップ（冪等）。
+        """
+        if self._guild is None:
+            return
+
+        ch_id = CHANNELS.get("一般")
+        if ch_id is None:
+            return
+        ch = self._guild.get_channel(ch_id)
+        if not isinstance(ch, discord.TextChannel):
+            return
+
+        # 既にpinがあるか確認
+        try:
+            pins = await ch.pins()
+            for pin in pins:
+                if pin.author == self.user and pin.embeds:
+                    title = pin.embeds[0].title or ""
+                    if "ミスターDオフィス" in title and "組織図" in title:
+                        log.info("ウェルカムembedは既にpinされています。スキップします。")
+                        return
+        except discord.Forbidden:
+            log.warning("権限不足: pinの確認/送信をスキップします。")
+            return
+        except discord.HTTPException as exc:
+            log.error("pin確認エラー: %s", exc)
+            return
+
+        embed = discord.Embed(
+            title="🏢 ミスターDオフィス — 組織図",
+            description=(
+                "**指揮系統**: えむ → フィル（司令塔）→ 伝書鳩 → 各部門\n\n"
+                "**【本部】** 司令塔 / 会議室\n"
+                "**【事業】** コンテンツ / デザイン / ライティング / リサーチ / 営業 / 広告\n"
+                "**【特殊】** 新規事業 / AI投資 / フィルコンサル / 不動産\n"
+                "**【SNS】** タクミX / どらどらSNS / コピーロボット\n"
+                "**【管理】** セキュリティ\n\n"
+                "14部門パネル: 司令塔チャンネルで `/relay_panel`"
+            ),
+            color=0xD4AF37,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text="ミスターDオフィス × 伝書鳩")
+
+        try:
+            msg = await ch.send(embed=embed)
+            await msg.pin()
+            log.info("ウェルカムembedを「一般」チャンネルにpinしました。")
+        except discord.Forbidden:
+            log.warning("権限不足: ウェルカムembedのpinをスキップします。")
+        except discord.HTTPException as exc:
+            log.error("ウェルカムembed送信/pinエラー: %s", exc)
+
+    # 改善6: ステータスダッシュボードに静的部門一覧を投稿
+    async def _post_startup_status(self) -> None:
+        """
+        「📊ステータス」チャンネルに起動時の静的部門一覧embedを投稿する。
+        shared_stateとの連携はPhase 2。今回は静的情報のみ。
+        """
+        if self._guild is None:
+            return
+
+        ch_id = CHANNELS.get("📊ステータス")
+        if ch_id is None:
+            log.warning("📊ステータスチャンネルが見つかりません。ステータス投稿をスキップします。")
+            return
+        ch = self._guild.get_channel(ch_id)
+        if not isinstance(ch, discord.TextChannel):
+            return
+
+        now_jst = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
+        embed = discord.Embed(
+            title="📊 ミスターDオフィス — 部門ステータス",
+            description=f"最終起動: {now_jst}\n全 {len(CHARACTERS)} 部門スタンバイ中",
+            color=0x00BCD4,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        # 部門一覧をカテゴリ別に整理
+        dept_groups = {
+            "🏢 本部": ["commander"],
+            "💼 事業部門": ["content", "design", "writing", "research", "sales", "advertising"],
+            "🚀 特殊部門": ["new_biz", "ai_investment", "phil_consulting", "real_estate"],
+            "📣 SNS・ブランディング": ["takumi_x", "doradora_sns", "origin_story"],
+            "🔒 管理": ["security"],
+        }
+
+        for group_name, dept_ids in dept_groups.items():
+            lines = []
+            for dept_id in dept_ids:
+                char = CHAR_BY_DEPT.get(dept_id)
+                if char:
+                    lines.append(f"{char['icon']} **{char['role']}** — `{dept_id}`")
+            if lines:
+                embed.add_field(name=group_name, value="\n".join(lines), inline=False)
+
+        embed.set_footer(text="Phase 2でshared_state連携予定 | ミスターDオフィス × 伝書鳩")
+
+        try:
+            await ch.send(embed=embed)
+            log.info("📊ステータスチャンネルに起動時ダッシュボードを投稿しました。")
+        except discord.Forbidden:
+            log.warning("権限不足: 📊ステータスへの投稿をスキップします。")
+        except discord.HTTPException as exc:
+            log.error("ステータス投稿エラー: %s", exc)
 
     async def on_disconnect(self) -> None:
         log.warning("伝書鳩: Discord から切断されました。再接続を試みます...")
