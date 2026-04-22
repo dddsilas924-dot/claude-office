@@ -1,0 +1,16 @@
+{
+  "api_model": "claude-sonnet-4-20250514",
+  "max_response_tokens": 500,
+  "monthly_cost_cap_usd": 30.0,
+  "rate_limit_per_minute": 10,
+  "autonomous_interval_hours": 4,
+  "quiet_hours": {"start": 0, "end": 7},
+  "meeting_schedule_hour": 14,
+  "context_history_limit": 5,
+  "deliverable_min_lines": 10,
+  "meeting_rounds": 3,
+  "meeting_turn_delay_sec": 3,
+  "api_timeout_sec": 15,
+  "cost_per_1m_input": 3.0,
+  "cost_per_1m_output": 15.0
+}
