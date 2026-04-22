@@ -113,6 +113,23 @@ export interface AgentAnimationState {
  * removed. Server-side removal would force a round-trip for what's
  * fundamentally a cosmetic concern.
  */
+/**
+ * Visual status derived from metadata for sprite display.
+ * "idle"       → normal appearance
+ * "busy"       → fast walking animation speed
+ * "blocked"    → red ! marker above head
+ * "has_output" → box icon above head
+ */
+export type BridgeAgentStatus = "idle" | "busy" | "blocked" | "has_output";
+
+/**
+ * Visibility level from metadata — drives glow intensity.
+ * "internal" → no glow (default)
+ * "shared"   → subtle glow
+ * "public"   → strong glow
+ */
+export type BridgeAgentVisibility = "internal" | "shared" | "public";
+
 export interface BridgeAgentState {
   deptId: string;
   displayName: string;
@@ -129,6 +146,30 @@ export interface BridgeAgentState {
   metadata: Record<string, unknown> | null;
   /** `Date.now()` of the last event for this dept — drives TTL pruning. */
   lastEventAt: number;
+  /** `Date.now()` when this event arrived — used to trigger reaction anim. */
+  reactionAt: number;
+  /** Visual status derived from metadata.status / metadata.has_output. */
+  agentStatus: BridgeAgentStatus;
+  /** Visibility level derived from metadata.visibility. */
+  visibility: BridgeAgentVisibility;
+}
+
+/**
+ * A single entry in the Discord conversation ticker at the bottom of canvas.
+ * Holds the last N bridge messages for marching-banner display.
+ */
+export interface BridgeMessageEntry {
+  /** Unique key for React rendering — combination of dept+timestamp. */
+  key: string;
+  deptId: string;
+  displayName: string;
+  /** Leading emoji extracted from displayName (dept badge). */
+  deptEmoji: string | null;
+  /** Raw message text (may be null for status-only events). */
+  text: string | null;
+  eventKind: string;
+  /** `Date.now()` when this entry was recorded — drives fade-in. */
+  arrivedAt: number;
 }
 
 /**
@@ -215,6 +256,12 @@ interface GameStore {
   pruneStaleBridgeAgents: (ttlMs: number, now?: number) => void;
   /** Wipe all bridge agents (session switch / reset). */
   clearBridgeAgents: () => void;
+
+  // ========== Recent Bridge Messages (Discord ticker) ==========
+  /** Ring buffer of the last N bridge messages for the ticker display. */
+  recentBridgeMessages: BridgeMessageEntry[];
+  /** Clear ticker messages (session switch). */
+  clearBridgeMessages: () => void;
 
   // ========== Queue State ==========
   arrivalQueue: string[]; // Agent IDs in order
@@ -404,6 +451,9 @@ const initialState = {
 
   // Bridge agents (ephemeral Commander Bridge sprites)
   bridgeAgents: new Map<string, BridgeAgentState>(),
+
+  // Recent bridge messages for Discord ticker
+  recentBridgeMessages: [] as BridgeMessageEntry[],
 
   // Queues
   arrivalQueue: [] as string[],
@@ -602,6 +652,27 @@ export const useGameStore = create<GameStore>()(
       set((state) => {
         // Upsert by dept_id so repeated ASK_STARTED/ASK_COMPLETED pairs for
         // the same dept mutate a single sprite in place rather than stacking.
+        const now = Date.now();
+        const meta = payload.metadata ?? null;
+
+        // Derive agentStatus from metadata fields
+        let agentStatus: BridgeAgentStatus = "idle";
+        if (meta) {
+          const metaStatus = meta["status"] as string | undefined;
+          const hasOutput = meta["has_output"] as boolean | undefined;
+          if (metaStatus === "busy") agentStatus = "busy";
+          else if (metaStatus === "blocked") agentStatus = "blocked";
+          else if (hasOutput === true) agentStatus = "has_output";
+        }
+
+        // Derive visibility from metadata
+        let visibility: BridgeAgentVisibility = "internal";
+        if (meta) {
+          const vis = meta["visibility"] as string | undefined;
+          if (vis === "public") visibility = "public";
+          else if (vis === "shared") visibility = "shared";
+        }
+
         const newBridgeAgents = new Map(state.bridgeAgents);
         newBridgeAgents.set(payload.dept_id, {
           deptId: payload.dept_id,
@@ -612,10 +683,35 @@ export const useGameStore = create<GameStore>()(
           model: payload.model ?? null,
           durationS: payload.duration_s ?? null,
           status: payload.status ?? null,
-          metadata: payload.metadata ?? null,
-          lastEventAt: Date.now(),
+          metadata: meta,
+          lastEventAt: now,
+          reactionAt: now,
+          agentStatus,
+          visibility,
         });
-        return { bridgeAgents: newBridgeAgents };
+
+        // Append to recent messages ticker (max 20 entries)
+        const LEADING_EMOJI_RE =
+          /^(\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*\uFE0F?)\s*/u;
+        const emojiMatch = payload.display_name.match(LEADING_EMOJI_RE);
+        const deptEmoji = emojiMatch ? emojiMatch[1] : null;
+
+        const newEntry: BridgeMessageEntry = {
+          key: `${payload.dept_id}-${now}`,
+          deptId: payload.dept_id,
+          displayName: payload.display_name,
+          deptEmoji,
+          text: payload.message ?? null,
+          eventKind: payload.event_kind,
+          arrivedAt: now,
+        };
+        const MAX_TICKER_ENTRIES = 20;
+        const newMessages = [
+          newEntry,
+          ...state.recentBridgeMessages,
+        ].slice(0, MAX_TICKER_ENTRIES);
+
+        return { bridgeAgents: newBridgeAgents, recentBridgeMessages: newMessages };
       }),
 
     removeBridgeAgent: (deptId) =>
@@ -647,6 +743,12 @@ export const useGameStore = create<GameStore>()(
       set((state) => {
         if (state.bridgeAgents.size === 0) return state;
         return { bridgeAgents: new Map<string, BridgeAgentState>() };
+      }),
+
+    clearBridgeMessages: () =>
+      set((state) => {
+        if (state.recentBridgeMessages.length === 0) return state;
+        return { recentBridgeMessages: [] };
       }),
 
     // ========================================================================
@@ -1136,6 +1238,7 @@ export const useGameStore = create<GameStore>()(
         ...initialState,
         agents: new Map(),
         bridgeAgents: new Map(),
+        recentBridgeMessages: [],
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         whiteboardData: { ...initialWhiteboardData },
         whiteboardMode: 0,
@@ -1146,6 +1249,7 @@ export const useGameStore = create<GameStore>()(
         ...initialState,
         agents: new Map(),
         bridgeAgents: new Map(),
+        recentBridgeMessages: [],
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         whiteboardData: { ...initialWhiteboardData },
         whiteboardMode: 0,
@@ -1158,6 +1262,7 @@ export const useGameStore = create<GameStore>()(
         agents: new Map(),
         // Bridge sprites are scoped to a session — new session, fresh canvas.
         bridgeAgents: new Map(),
+        recentBridgeMessages: [],
         arrivalQueue: [],
         departureQueue: [],
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
@@ -1315,3 +1420,5 @@ export const selectPrintReport = (state: GameStore) => state.printReport;
 export const selectWhiteboardData = (state: GameStore) => state.whiteboardData;
 export const selectWhiteboardMode = (state: GameStore) => state.whiteboardMode;
 export const selectConversation = (state: GameStore) => state.conversation;
+export const selectRecentBridgeMessages = (state: GameStore) =>
+  state.recentBridgeMessages;

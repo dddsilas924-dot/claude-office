@@ -7,11 +7,11 @@
 
 "use client";
 
-import { memo, useMemo, useState, useCallback, type ReactNode } from "react";
+import { memo, useMemo, useState, useCallback, useRef, type ReactNode } from "react";
 import { useTick } from "@pixi/react";
 import { Graphics, TextStyle, Texture } from "pixi.js";
 import type { Position, BubbleContent } from "@/types";
-import type { AgentPhase } from "@/stores/gameStore";
+import type { AgentPhase, BridgeAgentStatus, BridgeAgentVisibility } from "@/stores/gameStore";
 import { isInElevatorZone } from "@/systems/queuePositions";
 import { ICON_MAP } from "./shared/iconMap";
 import { drawBubble, drawIconBadge } from "./shared/drawBubble";
@@ -35,6 +35,17 @@ export interface AgentSpriteProps {
   renderBubble?: boolean; // Whether to render bubble (default true)
   renderLabel?: boolean; // Whether to render name label (default true)
   isTyping?: boolean; // Whether agent is typing (animates arms)
+  // ── Bridge-only reaction props ──────────────────────────────────────────────
+  /** Timestamp (Date.now()) of most-recent event — triggers jump animation. */
+  reactionAt?: number;
+  /** event_kind string — controls visual style of reaction ("ASK_STARTED" etc.) */
+  eventKind?: string;
+  /** Visual status from metadata — drives badge / animation speed variant. */
+  agentStatus?: BridgeAgentStatus;
+  /** Visibility level from metadata — drives glow intensity. */
+  visibility?: BridgeAgentVisibility;
+  /** Stagger delay in ms before this sprite starts its reaction animation. */
+  reactionDelayMs?: number;
 }
 
 // ============================================================================
@@ -70,6 +81,94 @@ function drawAgent(g: Graphics, color: string): void {
   );
   g.fill(colorNum);
   g.stroke({ width: STROKE_WIDTH, color: 0xffffff });
+}
+
+// ============================================================================
+// BRIDGE STATUS BADGE
+// Rendered above the character head to show agentStatus / visibility.
+// ============================================================================
+
+/** Glyph + color config for each BridgeAgentStatus value. */
+const STATUS_CONFIG: Record<
+  string,
+  { glyph: string; glyphColor: number; bgColor: number }
+> = {
+  blocked: { glyph: "!", glyphColor: 0xffffff, bgColor: 0xe74c3c },
+  busy: { glyph: "⚙", glyphColor: 0xffffff, bgColor: 0xe67e22 },
+  has_output: { glyph: "📦", glyphColor: 0xffffff, bgColor: 0x27ae60 },
+  idle: { glyph: "", glyphColor: 0xffffff, bgColor: 0x000000 }, // hidden
+};
+
+/**
+ * Tiny badge rendered above the character head.
+ * Only rendered when agentStatus != "idle" or visibility != "internal".
+ */
+interface BridgeStatusBadgeProps {
+  agentStatus: BridgeAgentStatus;
+  visibility: BridgeAgentVisibility;
+  /** y coordinate of the badge center relative to agent origin. */
+  yOffset: number;
+}
+
+function BridgeStatusBadge({
+  agentStatus,
+  visibility,
+  yOffset,
+}: BridgeStatusBadgeProps): ReactNode {
+  // Glow ring config based on visibility level
+  const glowColor =
+    visibility === "public"
+      ? 0xf1c40f // gold
+      : visibility === "shared"
+        ? 0x3498db // blue
+        : null; // no glow for "internal"
+
+  const statusCfg = STATUS_CONFIG[agentStatus];
+  const showStatusBadge = agentStatus !== "idle" && statusCfg;
+
+  if (!glowColor && !showStatusBadge) return null;
+
+  return (
+    <pixiContainer y={yOffset}>
+      {/* Visibility glow ring */}
+      {glowColor && (
+        <pixiGraphics
+          draw={(g) => {
+            g.clear();
+            g.circle(0, 0, 14);
+            g.stroke({ width: 2.5, color: glowColor, alpha: 0.85 });
+          }}
+        />
+      )}
+      {/* Status badge (blocked / busy / has_output) */}
+      {showStatusBadge && (
+        <>
+          <pixiGraphics
+            draw={(g) => {
+              g.clear();
+              g.circle(0, 0, 8);
+              g.fill(statusCfg.bgColor);
+              g.stroke({ width: 1.5, color: 0xffffff });
+            }}
+          />
+          <pixiContainer scale={0.5}>
+            <pixiText
+              text={statusCfg.glyph}
+              anchor={0.5}
+              style={{
+                fontFamily:
+                  '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",monospace',
+                fontSize: 16,
+                fill: statusCfg.glyphColor,
+                fontWeight: "bold",
+              }}
+              resolution={2}
+            />
+          </pixiContainer>
+        </>
+      )}
+    </pixiContainer>
+  );
 }
 
 // ============================================================================
@@ -253,6 +352,11 @@ function Bubble({ content, yOffset, side = "right" }: BubbleProps): ReactNode {
 // MAIN COMPONENT
 // ============================================================================
 
+// Duration of jump reaction animation in ms
+const JUMP_ANIM_DURATION_MS = 600;
+// Peak jump height (negative Y = up)
+const JUMP_PEAK_PX = 12;
+
 function AgentSpriteComponent({
   id: _id,
   name,
@@ -267,6 +371,11 @@ function AgentSpriteComponent({
   renderBubble = true,
   renderLabel = true,
   isTyping = false,
+  reactionAt,
+  eventKind = "",
+  agentStatus = "idle",
+  visibility = "internal",
+  reactionDelayMs = 0,
 }: AgentSpriteProps): ReactNode {
   // Memoize draw callback
   const drawCallback = useMemo(
@@ -275,39 +384,121 @@ function AgentSpriteComponent({
   );
 
   // ---------- Idle breathing animation for character sprites ----------
-  // Gentle sine-wave bob so the pixel art feels alive.  The amplitude is
-  // intentionally tiny (±1.5 px) — just enough to register subconsciously
-  // without looking like the character is jumping.  When `isTyping` is
-  // true the bob speeds up and the amplitude doubles to convey urgency.
   const [breathOffset, setBreathOffset] = useState(0);
   const breathTimeRef = useState(() => ({ t: Math.random() * Math.PI * 2 }))[0];
 
-  useTick((ticker) => {
-    if (!characterTexture) return; // capsule agents don't breathe
-    const speed = isTyping ? 0.12 : 0.04;
-    const amplitude = isTyping ? 3 : 1.5;
-    breathTimeRef.t += ticker.deltaTime * speed;
-    setBreathOffset(Math.sin(breathTimeRef.t) * amplitude);
+  // ---------- Bridge reaction jump animation ----------
+  // When reactionAt changes (new event arrived), the character jumps.
+  // A sine arch: jumpOffset goes 0 → -JUMP_PEAK_PX → 0 over JUMP_ANIM_DURATION_MS.
+  // HEARTBEAT events produce no jump — just a subtle pulse via opacity.
+  const [jumpOffset, setJumpOffset] = useState(0);
+  const jumpStateRef = useRef<{
+    startMs: number;
+    active: boolean;
+    delayRemaining: number;
+  }>({ startMs: 0, active: false, delayRemaining: 0 });
+
+  // Track previous reactionAt to detect new events
+  const prevReactionAtRef = useRef<number | undefined>(undefined);
+  if (reactionAt !== prevReactionAtRef.current) {
+    prevReactionAtRef.current = reactionAt;
+    const isHeartbeat = eventKind === "HEARTBEAT";
+    if (!isHeartbeat && reactionAt !== undefined) {
+      // Arm the jump — will start after delayRemaining ticks drain
+      jumpStateRef.current = {
+        startMs: 0,
+        active: false,
+        delayRemaining: reactionDelayMs,
+      };
+    }
+  }
+
+  // Bubble fade-in alpha (0→1 over 300ms when reaction fires)
+  const [bubbleAlpha, setBubbleAlpha] = useState(1);
+  const bubbleFadeRef = useRef<{ startMs: number; active: boolean }>({
+    startMs: 0,
+    active: false,
   });
+
+  useTick((ticker) => {
+    const deltaMs = ticker.deltaMS;
+
+    // Breathing animation
+    if (characterTexture) {
+      // For ASK_STARTED: busy animation speed
+      const isBusy = agentStatus === "busy" || isTyping;
+      const speed = isBusy ? 0.12 : 0.04;
+      const amplitude = isBusy ? 3 : 1.5;
+      breathTimeRef.t += ticker.deltaTime * speed;
+      setBreathOffset(Math.sin(breathTimeRef.t) * amplitude);
+    }
+
+    // Jump animation timing
+    const js = jumpStateRef.current;
+    if (js.delayRemaining > 0) {
+      js.delayRemaining -= deltaMs;
+      if (js.delayRemaining <= 0) {
+        js.delayRemaining = 0;
+        js.active = true;
+        js.startMs = 0;
+        // Arm bubble fade
+        bubbleFadeRef.current = { startMs: 0, active: true };
+        setBubbleAlpha(0);
+      }
+    } else if (js.active) {
+      js.startMs += deltaMs;
+      const t = Math.min(js.startMs / JUMP_ANIM_DURATION_MS, 1);
+      // Sine arch: sin(π·t) peaks at t=0.5
+      const newOffset = -Math.sin(Math.PI * t) * JUMP_PEAK_PX;
+      setJumpOffset(newOffset);
+      if (t >= 1) {
+        js.active = false;
+        setJumpOffset(0);
+      }
+    }
+
+    // Bubble fade-in
+    const bf = bubbleFadeRef.current;
+    if (bf.active) {
+      bf.startMs += deltaMs;
+      const t = Math.min(bf.startMs / 300, 1);
+      setBubbleAlpha(t);
+      if (t >= 1) {
+        bf.active = false;
+        setBubbleAlpha(1);
+      }
+    }
+  });
+
+  // Derive thinking indicator: show "..." inside bubble for ASK_STARTED when no message
+  const isThinking = eventKind === "ASK_STARTED";
+  // For HEARTBEAT: character just blinks lightly (handled via alpha below)
+  const isHeartbeat = eventKind === "HEARTBEAT";
+  const heartbeatAlpha = isHeartbeat ? 0.7 : 1;
 
   // Bubble offset for capsule rendering
   const bubbleOffset = -93;
 
+  // Combined Y offset: breathing bob + jump reaction
+  const spriteYOffset = breathOffset + jumpOffset;
+
   return (
-    <pixiContainer x={position.x} y={position.y}>
+    <pixiContainer x={position.x} y={position.y} alpha={heartbeatAlpha}>
       {/* Character portrait PNG if available, otherwise capsule */}
       {characterTexture ? (
         <pixiSprite
           texture={characterTexture}
           anchor={{ x: 0.5, y: 0.9 }}
           x={0}
-          y={breathOffset}
+          y={spriteYOffset}
           scale={0.65}
         />
       ) : (
         <>
           {/* Fallback: Agent capsule body */}
-          <pixiGraphics draw={drawCallback} />
+          <pixiContainer y={spriteYOffset}>
+            <pixiGraphics draw={drawCallback} />
+          </pixiContainer>
 
           {/* Sunglasses (only on capsule fallback) */}
           {sunglassesTexture && (
@@ -315,25 +506,40 @@ function AgentSpriteComponent({
               texture={sunglassesTexture}
               anchor={0.5}
               x={0}
-              y={-37}
+              y={-37 + spriteYOffset}
               scale={{ x: 0.036, y: 0.04 }}
             />
           )}
         </>
       )}
 
-      {/* Agent name if present - hide when in elevator or when renderLabel is false.
-          Bridge sprites arrive with labels like "🏠 不動産事業部 アイリ" — we
-          split the leading pictographic so the dept glyph floats above the
-          capsule as a large badge (instant visual ID at FB-screenshot zoom)
-          and the 日本語 line below stays sized for readability on mobile. */}
+      {/* Agent name if present - hide when in elevator or when renderLabel is false. */}
       {renderLabel && name && !isInElevatorZone(position) && (
         <AgentNameLabel name={name} />
       )}
 
+      {/* Bridge status badge (blocked / busy / has_output / visibility glow) */}
+      {(agentStatus !== "idle" || visibility !== "internal") && (
+        <BridgeStatusBadge
+          agentStatus={agentStatus}
+          visibility={visibility}
+          yOffset={-110 + spriteYOffset}
+        />
+      )}
+
+      {/* Thinking indicator for ASK_STARTED with no bubble */}
+      {isThinking && !bubble && renderBubble && !isInElevatorZone(position) && (
+        <Bubble
+          content={{ type: "thought", text: "..." }}
+          yOffset={bubbleOffset + spriteYOffset}
+        />
+      )}
+
       {/* Bubble - hide when in elevator or when renderBubble is false */}
       {renderBubble && bubble && !isInElevatorZone(position) && (
-        <Bubble content={bubble} yOffset={bubbleOffset} />
+        <pixiContainer alpha={bubbleAlpha}>
+          <Bubble content={bubble} yOffset={bubbleOffset + spriteYOffset} />
+        </pixiContainer>
       )}
     </pixiContainer>
   );

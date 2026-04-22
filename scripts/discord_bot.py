@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """
-Commander Bridge — Discord Bot
-==============================
+伝書鳩 — Discord Bot
+====================
 常駐型 Discord Bot。えむが寝ている間も Empire Monitor の各部門キャラを
 Canvas 上に生き続けさせ、Discord チャンネルのメッセージを Canvas へ転送する。
+
+アーキテクチャルール:
+- Discord = 部門が自律的に動く場。えむは審査員
+- Office (Canvas) = 視覚的に見える場
+- Claude Code = えむが直接指示する場（別世界線）
+
+指揮系統:
+- 基本: えむ → フィル（司令塔）→ 伝書鳩 → 各部門
+- 例外: 外部イレギュラーは直接部門に届く
+- 14部門パネル: えむ（どらどら）専用の指示ツール
+
+成果物:
+- えむ指示の成果物 → 📦えむの成果物
+- 部門自律の成果物 → 📦部門の成果物
+
+セッション連携:
+- Claude Code セッション切替時 → Discord に通知
+- 全ログは流さない → 要約・状態のみ同期
 
 機能:
 1. スラッシュコマンド: /status /ask /bridge
@@ -11,9 +29,12 @@ Canvas 上に生き続けさせ、Discord チャンネルのメッセージを C
 3. Discord → Canvas メッセージ転送 (HMAC 署名付き external_event API)
 4. Canvas ハートビート (5 分ごとに全キャラ再送信で TTL をリセット)
 5. 自動再接続 / グレースフルシャットダウン
+6. 14部門中継パネル (RelayPanelView: 永続View + モーダル)
+7. 添付ファイル処理 (画像/PDF/MD/txt/動画)
+8. 保管庫チャンネル自動作成
 
 使い方:
-    pip install discord.py python-dotenv
+    pip install discord.py python-dotenv aiohttp
     python scripts/discord_bot.py
 
 必須環境変数 (.env):
@@ -40,6 +61,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 import discord
 from discord import app_commands
 
@@ -97,6 +119,9 @@ HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))  # �
 GUILD_ID: int = 1494899621460312145
 JST = timezone(timedelta(hours=9))
 
+# 添付ファイルのテキスト最大文字数
+ATTACHMENT_TEXT_MAX = 2000
+
 # ---------------------------------------------------------------------------
 # チャンネル定義
 # ---------------------------------------------------------------------------
@@ -119,6 +144,7 @@ CHANNELS: dict[str, int] = {
     "会議室": 1495637503175168092,
     "司令塔ログ": 1495637504580386978,
     "一般": 1494899622253170781,
+    # 保管庫チャンネルは on_ready で動的追加される
 }
 
 # チャンネル ID → 部門名 の逆引き
@@ -263,6 +289,22 @@ CHANNEL_TO_DEPT_ID: dict[str, str] = {
     "司令塔ログ": "commander",
 }
 
+# 14部門パネル用: dept_id → チャンネル名 のマッピング
+RELAY_DEPT_TO_CHANNEL: dict[str, str] = {
+    "commander": "司令塔",
+    "content": "コンテンツ部",
+    "design": "デザイン部",
+    "writing": "ライティング部",
+    "research": "リサーチ部",
+    "new_biz": "新規事業部",
+    "sales": "営業部",
+    "advertising": "広告部",
+    "phil_consulting": "フィルコンサル部",
+    "ai_investment": "AI投資部",
+    "security": "セキュリティ部",
+    "bridge": "コピーロボット部",
+}
+
 # ハートビートで使うステータスメッセージ (循環してマンネリを防ぐ)
 HEARTBEAT_MESSAGES: dict[str, list[str]] = {
     "commander": [
@@ -352,42 +394,64 @@ def _sign_request(body: bytes, secret: str) -> tuple[str, str]:
     return signature, timestamp
 
 
-def _post_external_event(payload: dict[str, Any]) -> bool:
+# ---------------------------------------------------------------------------
+# TASK-06: aiohttp による非同期 Canvas API クライアント
+# ---------------------------------------------------------------------------
+
+# Bot 起動時に作成、close 時に cleanup する shared session
+_aiohttp_session: aiohttp.ClientSession | None = None
+
+
+def _get_aiohttp_session() -> aiohttp.ClientSession:
+    """既存の aiohttp session を返す。未作成なら新規作成する。"""
+    global _aiohttp_session
+    if _aiohttp_session is None or _aiohttp_session.closed:
+        _aiohttp_session = aiohttp.ClientSession()
+    return _aiohttp_session
+
+
+async def _close_aiohttp_session() -> None:
+    """aiohttp session を安全に閉じる。"""
+    global _aiohttp_session
+    if _aiohttp_session and not _aiohttp_session.closed:
+        await _aiohttp_session.close()
+        _aiohttp_session = None
+        log.info("aiohttp session closed.")
+
+
+async def _post_external_event_async(payload: dict[str, Any]) -> bool:
     """
-    Canvas の external_event API に HMAC 署名付きで POST する。
+    Canvas の external_event API に HMAC 署名付きで非同期 POST する。
     Returns: True if 2xx, False otherwise
     """
-    import urllib.error
-    import urllib.request
-
     body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
     signature, timestamp = _sign_request(body, HMAC_SECRET)
 
     url = f"{OFFICE_BASE_URL}/api/v1/external_event"
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-Bridge-Signature": signature,
-            "X-Bridge-Timestamp": timestamp,
-        },
-        method="POST",
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "X-Bridge-Signature": signature,
+        "X-Bridge-Timestamp": timestamp,
+    }
 
+    session = _get_aiohttp_session()
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status = resp.status
-            if 200 <= status < 300:
+        async with session.post(
+            url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if 200 <= resp.status < 300:
                 return True
-            log.warning("Canvas API returned HTTP %d", status)
+            body_text = await resp.text()
+            log.warning("Canvas API returned HTTP %d: %s", resp.status, body_text[:200])
             return False
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read(200).decode("utf-8", errors="replace")
-        log.error("Canvas API HTTP error %d: %s", exc.code, body_text)
+    except aiohttp.ClientResponseError as exc:
+        log.error("Canvas API HTTP error %d: %s", exc.status, exc.message)
         return False
-    except urllib.error.URLError as exc:
-        log.error("Canvas API URL error: %s", exc.reason)
+    except aiohttp.ClientConnectionError as exc:
+        log.error("Canvas API connection error: %s", exc)
+        return False
+    except asyncio.TimeoutError:
+        log.error("Canvas API request timed out.")
         return False
     except Exception as exc:
         log.error("Canvas API unexpected error: %s", exc)
@@ -399,10 +463,18 @@ async def send_canvas_event(
     message: str,
     event_kind: str = "ASK_COMPLETED",
     session_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> bool:
     """
     Canvas に指定部門のイベントを非同期で送信する。
-    ブロッキング I/O を executor で実行して event loop をブロックしない。
+    aiohttp を使用してノンブロッキングで実行する。
+
+    Args:
+        dept_id: 部門ID
+        message: Canvas に送るメッセージ本文
+        event_kind: イベント種別 (ASK_COMPLETED / ASK_STARTED 等)
+        session_id: Canvas セッションID (省略時はデフォルト)
+        metadata: 追加メタデータ (添付ファイル情報など)
     """
     char = CHAR_BY_DEPT.get(dept_id, CHAR_BY_DEPT["bridge"])
     sid = session_id or CANVAS_SESSION_ID
@@ -417,12 +489,218 @@ async def send_canvas_event(
         "model": char.get("model", "sonnet"),
         "status": "ok",
     }
+    if metadata:
+        payload["metadata"] = metadata
 
-    loop = asyncio.get_running_loop()
-    ok: bool = await loop.run_in_executor(None, _post_external_event, payload)
+    ok: bool = await _post_external_event_async(payload)
     if ok:
         log.debug("Canvas event sent: dept=%s kind=%s", dept_id, event_kind)
     return ok
+
+
+# ---------------------------------------------------------------------------
+# TASK-04: 添付ファイル処理ユーティリティ
+# ---------------------------------------------------------------------------
+
+# 対応拡張子
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_PDF_EXTS = {".pdf"}
+_TEXT_EXTS = {".md", ".txt"}
+_VIDEO_EXTS = {".mp4", ".mov"}
+
+
+async def _process_attachments(
+    attachments: list[discord.Attachment],
+) -> dict[str, Any]:
+    """
+    添付ファイルを解析して Canvas メタデータ用の dict を返す。
+
+    Returns:
+        metadata dict with keys: images, pdfs, texts, videos
+    """
+    metadata: dict[str, Any] = {}
+    images = []
+    pdfs = []
+    texts = []
+    videos = []
+
+    session = _get_aiohttp_session()
+
+    for att in attachments:
+        ext = Path(att.filename).suffix.lower()
+
+        if ext in _IMAGE_EXTS:
+            images.append({"filename": att.filename, "url": att.url, "size": att.size})
+
+        elif ext in _PDF_EXTS:
+            pdfs.append({"filename": att.filename, "size": att.size, "url": att.url})
+
+        elif ext in _TEXT_EXTS:
+            # テキスト系は内容を読み込む
+            try:
+                async with session.get(
+                    att.url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    raw = await resp.read()
+                    text_content = raw.decode("utf-8", errors="replace")[:ATTACHMENT_TEXT_MAX]
+                    texts.append({
+                        "filename": att.filename,
+                        "size": att.size,
+                        "content": text_content,
+                    })
+            except Exception as exc:
+                log.warning("Failed to fetch text attachment %s: %s", att.filename, exc)
+                texts.append({"filename": att.filename, "size": att.size, "content": "(取得失敗)"})
+
+        elif ext in _VIDEO_EXTS:
+            videos.append({"filename": att.filename, "size": att.size, "url": att.url})
+
+        else:
+            # 未対応フォーマットはURL付きで記録のみ
+            log.debug("Unsupported attachment format: %s", att.filename)
+
+    if images:
+        metadata["images"] = images
+    if pdfs:
+        metadata["pdfs"] = pdfs
+    if texts:
+        metadata["texts"] = texts
+    if videos:
+        metadata["videos"] = videos
+
+    return metadata
+
+
+def _format_attachment_summary(metadata: dict[str, Any]) -> str:
+    """添付ファイルのサマリー文字列を生成する (Canvas メッセージ末尾に追記)。"""
+    parts = []
+    if "images" in metadata:
+        for img in metadata["images"]:
+            parts.append(f"[画像: {img['filename']}]")
+    if "pdfs" in metadata:
+        for pdf in metadata["pdfs"]:
+            size_kb = pdf["size"] // 1024
+            parts.append(f"[PDF: {pdf['filename']} ({size_kb}KB)]")
+    if "texts" in metadata:
+        for txt in metadata["texts"]:
+            parts.append(f"[テキスト: {txt['filename']}]")
+    if "videos" in metadata:
+        for vid in metadata["videos"]:
+            size_mb = vid["size"] // (1024 * 1024)
+            parts.append(f"[動画: {vid['filename']} ({size_mb}MB)]")
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# TASK-03: 14部門中継パネル — RelayPanelView (永続 View)
+# ---------------------------------------------------------------------------
+
+class RelayMessageModal(discord.ui.Modal):
+    """部門へのメッセージ入力モーダル。ボタン押下後に表示される。"""
+
+    message_input = discord.ui.TextInput(
+        label="メッセージ",
+        style=discord.TextStyle.paragraph,
+        placeholder="部門へ送るメッセージを入力してください...",
+        required=True,
+        max_length=2000,
+    )
+
+    def __init__(self, dept_id: str, dept_display: str) -> None:
+        super().__init__(title=f"{dept_display} へのメッセージ", timeout=120)
+        self.dept_id = dept_id
+        self.dept_display = dept_display
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        msg_text = self.message_input.value.strip()
+        sender = interaction.user.display_name
+
+        await interaction.response.defer(ephemeral=True)
+
+        # 1. 該当部門チャンネルに転送
+        channel_name = RELAY_DEPT_TO_CHANNEL.get(self.dept_id)
+        forwarded_to_channel = False
+        if channel_name and channel_name in CHANNELS:
+            guild = interaction.guild
+            if guild is not None:
+                ch = guild.get_channel(CHANNELS[channel_name])
+                if isinstance(ch, discord.TextChannel):
+                    try:
+                        char = CHAR_BY_DEPT.get(self.dept_id, CHAR_BY_DEPT["bridge"])
+                        fwd_embed = discord.Embed(
+                            title=f"{char['icon']} {channel_name} へのメッセージ",
+                            description=msg_text,
+                            color=char["discord_color"],
+                            timestamp=datetime.now(timezone.utc),
+                        )
+                        fwd_embed.set_footer(text=f"差出人: {sender} | ミスターDオフィス × 伝書鳩")
+                        await ch.send(embed=fwd_embed)
+                        forwarded_to_channel = True
+                    except discord.Forbidden:
+                        log.warning("権限不足: %s チャンネルへの送信失敗", channel_name)
+                    except discord.DiscordException as exc:
+                        log.error("チャンネル転送エラー (%s): %s", channel_name, exc)
+
+        # 2. Canvas に HMAC イベント送信
+        canvas_msg = f"[中継パネル from {sender}] {msg_text}"
+        ok = await send_canvas_event(
+            self.dept_id, canvas_msg, event_kind="ASK_STARTED"
+        )
+
+        # 3. 送信者に確認メッセージ
+        status_parts = []
+        if forwarded_to_channel:
+            status_parts.append(f"Discordチャンネル ({channel_name or '?'}) へ転送済み")
+        status_parts.append("Canvas へ" + ("送信済み" if ok else "送信失敗 (Canvas 未接続)"))
+
+        await interaction.followup.send(
+            f"メッセージを送信しました。\n" + "\n".join(f"- {s}" for s in status_parts),
+            ephemeral=True,
+        )
+
+        log.info(
+            "RelayPanel: %s から %s へ転送 (channel_ok=%s, canvas_ok=%s)",
+            sender, self.dept_id, forwarded_to_channel, ok,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        log.error("RelayMessageModal error: %s", error)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "エラーが発生しました。もう一度お試しください。", ephemeral=True
+            )
+
+
+class RelayDeptButton(discord.ui.Button):
+    """14部門パネルの各ボタン。custom_id = relay_{dept_id} 形式。"""
+
+    def __init__(self, char: dict[str, Any]) -> None:
+        dept_id = char["dept_id"]
+        super().__init__(
+            label=char["display_name"],
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"relay_{dept_id}",
+            emoji=None,  # display_name に絵文字が含まれるため不要
+        )
+        self.dept_id = dept_id
+        self.dept_display = char["display_name"]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        modal = RelayMessageModal(dept_id=self.dept_id, dept_display=self.dept_display)
+        await interaction.response.send_modal(modal)
+
+
+class RelayPanelView(discord.ui.View):
+    """
+    14部門中継パネルの永続 View。
+    Bot 再起動後もボタンが動作するよう timeout=None + persistent=True で実装。
+    bot.add_view(RelayPanelView()) で永続登録する。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)  # 永続View は timeout=None 必須
+        for char in CHARACTERS:
+            self.add_item(RelayDeptButton(char))
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +716,6 @@ class CommanderBridgeBot(discord.Client):
 
         super().__init__(
             intents=intents,
-            # 自動シャードは小規模 guild なので不要
         )
 
         self.tree = app_commands.CommandTree(self)
@@ -446,7 +723,6 @@ class CommanderBridgeBot(discord.Client):
         self._guild: discord.Guild | None = None
         self._ready_event = asyncio.Event()
 
-        # シグナルハンドラ登録 (Ctrl+C / SIGTERM でグレースフルシャットダウン)
         self._shutdown_requested = False
 
     # ------------------------------------------------------------------
@@ -454,15 +730,18 @@ class CommanderBridgeBot(discord.Client):
     # ------------------------------------------------------------------
 
     async def setup_hook(self) -> None:
-        """Bot 起動時に 1 回だけ呼ばれる。スラッシュコマンドを登録。"""
+        """Bot 起動時に 1 回だけ呼ばれる。スラッシュコマンド登録と永続View 登録。"""
+        # TASK-03: 永続 View を登録 (Bot 再起動後もボタンが動作する)
+        self.add_view(RelayPanelView())
+        log.info("RelayPanelView registered as persistent view.")
+
         guild = discord.Object(id=GUILD_ID)
-        # グローバル sync より guild sync の方が即時反映される
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
         log.info("Slash commands synced to guild %d", GUILD_ID)
 
     async def on_ready(self) -> None:
-        log.info("Logged in as %s (id=%d)", self.user, self.user.id)  # type: ignore[union-attr]
+        log.info("伝書鳩: Logged in as %s (id=%d)", self.user, self.user.id)  # type: ignore[union-attr]
 
         await self.change_presence(
             status=discord.Status.online,
@@ -478,6 +757,12 @@ class CommanderBridgeBot(discord.Client):
         else:
             log.info("Guild: %s (%d channels)", self._guild.name, len(self._guild.channels))
 
+            # TASK-02: サーバー名を「ミスターDオフィス」に変更 (冪等)
+            await self._ensure_guild_name("ミスターDオフィス")
+
+            # TASK-05: 保管庫チャンネル自動作成
+            await self._ensure_storage_channels()
+
         # 最初に全キャラを Canvas に送信してプレゼンスを確立する
         await self._announce_online()
 
@@ -488,16 +773,83 @@ class CommanderBridgeBot(discord.Client):
             )
 
         self._ready_event.set()
-        log.info("Bot is fully ready. Heartbeat interval: %ds", HEARTBEAT_INTERVAL)
+        log.info("伝書鳩: 完全起動完了。Heartbeat interval: %ds", HEARTBEAT_INTERVAL)
+
+    # TASK-02: サーバー名変更 (冪等)
+    async def _ensure_guild_name(self, target_name: str) -> None:
+        """サーバー名が target_name と異なる場合のみ変更する。"""
+        if self._guild is None:
+            return
+        if self._guild.name == target_name:
+            log.info("サーバー名は既に '%s' です。変更不要。", target_name)
+            return
+        try:
+            await self._guild.edit(name=target_name)
+            log.info("サーバー名を '%s' に変更しました。", target_name)
+        except discord.Forbidden:
+            log.warning("MANAGE_GUILD 権限不足: サーバー名変更をスキップします。")
+        except discord.HTTPException as exc:
+            log.error("サーバー名変更エラー: %s", exc)
+
+    # TASK-05: 保管庫チャンネル自動作成
+    async def _ensure_storage_channels(self) -> None:
+        """
+        📦えむの成果物 / 📦部門の成果物 チャンネルが存在しなければ作成する。
+        カテゴリ「保管庫」がなければ作成してから入れる。
+        作成後は CHANNELS dict に動的追加する。
+        """
+        if self._guild is None:
+            return
+
+        storage_channels = ["📦えむの成果物", "📦部門の成果物"]
+        existing_names = {ch.name for ch in self._guild.channels}
+
+        # 保管庫カテゴリの確保
+        storage_category: discord.CategoryChannel | None = None
+        for cat in self._guild.categories:
+            if cat.name == "保管庫":
+                storage_category = cat
+                break
+
+        if storage_category is None:
+            try:
+                storage_category = await self._guild.create_category("保管庫")
+                log.info("カテゴリ「保管庫」を作成しました。")
+            except discord.Forbidden:
+                log.warning("権限不足: カテゴリ「保管庫」の作成をスキップします。")
+            except discord.HTTPException as exc:
+                log.error("カテゴリ作成エラー: %s", exc)
+
+        for ch_name in storage_channels:
+            if ch_name in existing_names:
+                # 既存チャンネルの ID を CHANNELS に追加
+                existing_ch = discord.utils.get(self._guild.channels, name=ch_name)
+                if existing_ch is not None and ch_name not in CHANNELS:
+                    CHANNELS[ch_name] = existing_ch.id
+                    CHANNEL_TO_DEPT[existing_ch.id] = ch_name
+                    log.info("保管庫チャンネル確認済み: %s (id=%d)", ch_name, existing_ch.id)
+                continue
+            try:
+                kwargs: dict[str, Any] = {}
+                if storage_category is not None:
+                    kwargs["category"] = storage_category
+                new_ch = await self._guild.create_text_channel(ch_name, **kwargs)
+                CHANNELS[ch_name] = new_ch.id
+                CHANNEL_TO_DEPT[new_ch.id] = ch_name
+                log.info("保管庫チャンネル作成: %s (id=%d)", ch_name, new_ch.id)
+            except discord.Forbidden:
+                log.warning("権限不足: チャンネル %s の作成をスキップします。", ch_name)
+            except discord.HTTPException as exc:
+                log.error("チャンネル作成エラー (%s): %s", ch_name, exc)
 
     async def on_disconnect(self) -> None:
-        log.warning("Disconnected from Discord. Will attempt reconnect...")
+        log.warning("伝書鳩: Discord から切断されました。再接続を試みます...")
 
     async def on_resumed(self) -> None:
-        log.info("Connection resumed.")
+        log.info("伝書鳩: 接続再開しました。")
 
     async def on_error(self, event: str, *args: Any, **kwargs: Any) -> None:
-        log.exception("Unhandled error in event '%s'", event)
+        log.exception("伝書鳩: イベント '%s' で未処理エラー発生", event)
 
     async def close(self) -> None:
         """グレースフルシャットダウン"""
@@ -508,8 +860,10 @@ class CommanderBridgeBot(discord.Client):
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+        # TASK-06: aiohttp session を cleanup
+        await _close_aiohttp_session()
         await super().close()
-        log.info("Bot shut down cleanly.")
+        log.info("伝書鳩: 正常シャットダウン完了。")
 
     # ------------------------------------------------------------------
     # Canvas 通知
@@ -517,7 +871,7 @@ class CommanderBridgeBot(discord.Client):
 
     async def _announce_online(self) -> None:
         """起動時に全キャラを Canvas に表示する"""
-        log.info("Announcing all characters to Canvas (session=%s)...", CANVAS_SESSION_ID)
+        log.info("伝書鳩: 全キャラを Canvas に通知中 (session=%s)...", CANVAS_SESSION_ID)
         success = 0
         fail = 0
         for char in CHARACTERS:
@@ -544,7 +898,7 @@ class CommanderBridgeBot(discord.Client):
                 if self._shutdown_requested:
                     break
 
-                log.info("Heartbeat: refreshing %d characters on Canvas...", len(CHARACTERS))
+                log.info("伝書鳩 ハートビート: %d キャラを Canvas に再送信...", len(CHARACTERS))
                 now_jst = datetime.now(JST).strftime("%H:%M JST")
                 success = 0
 
@@ -562,16 +916,16 @@ class CommanderBridgeBot(discord.Client):
                         success += 1
                     await asyncio.sleep(0.1)
 
-                log.info("Heartbeat done: %d/%d refreshed", success, len(CHARACTERS))
+                log.info("ハートビート完了: %d/%d 更新", success, len(CHARACTERS))
 
             except asyncio.CancelledError:
-                log.info("Heartbeat loop cancelled.")
+                log.info("伝書鳩: ハートビートループ停止。")
                 break
             except Exception:
-                log.exception("Heartbeat loop error (will retry next interval)")
+                log.exception("ハートビートループエラー (次回インターバルで再試行)")
 
     # ------------------------------------------------------------------
-    # メッセージイベント
+    # TASK-04: メッセージイベント (添付ファイル処理を追加)
     # ------------------------------------------------------------------
 
     async def on_message(self, message: discord.Message) -> None:
@@ -608,14 +962,45 @@ class CommanderBridgeBot(discord.Client):
         if channel_name and channel_name in CHANNEL_TO_DEPT_ID:
             dept_id = CHANNEL_TO_DEPT_ID[channel_name]
             author_name = message.author.display_name
-            forward_msg = (
-                f"[Discord/{channel_name}] {author_name}: {content}"
-            )
+
+            # 添付ファイルを処理
+            attachment_metadata: dict[str, Any] = {}
+            attachment_summary = ""
+            if message.attachments:
+                attachment_metadata = await _process_attachments(message.attachments)
+                attachment_summary = _format_attachment_summary(attachment_metadata)
+                log.debug(
+                    "添付ファイル処理: %s から %d 件 (channel=%s)",
+                    author_name, len(message.attachments), channel_name,
+                )
+
+            # テキストメッセージの組み立て
+            forward_parts = [f"[Discord/{channel_name}] {author_name}: {content}"]
+            if attachment_summary:
+                forward_parts.append(attachment_summary)
+
+            # テキスト系添付の内容をメッセージに含める
+            if "texts" in attachment_metadata:
+                for txt in attachment_metadata["texts"]:
+                    forward_parts.append(
+                        f"\n--- {txt['filename']} ---\n{txt['content']}"
+                    )
+
+            forward_msg = "\n".join(forward_parts)
+
             asyncio.create_task(
-                send_canvas_event(dept_id, forward_msg, event_kind="ASK_STARTED"),
+                send_canvas_event(
+                    dept_id,
+                    forward_msg,
+                    event_kind="ASK_STARTED",
+                    metadata=attachment_metadata if attachment_metadata else None,
+                ),
                 name=f"fwd_{dept_id}",
             )
-            log.debug("Forwarding message from %s to Canvas dept=%s", channel_name, dept_id)
+            log.debug(
+                "伝書鳩: %s → Canvas dept=%s (attachments=%d)",
+                channel_name, dept_id, len(message.attachments),
+            )
 
     # ------------------------------------------------------------------
     # テキストコマンド実装
@@ -625,7 +1010,7 @@ class CommanderBridgeBot(discord.Client):
         """テスト: Bot が生きているかの確認"""
         now_jst = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S JST")
         embed = discord.Embed(
-            title="Commander Bridge — 接続テスト",
+            title="伝書鳩 — 接続テスト",
             description="Bot は正常稼働中です。",
             color=0xD4AF37,
             timestamp=datetime.now(timezone.utc),
@@ -634,7 +1019,7 @@ class CommanderBridgeBot(discord.Client):
         embed.add_field(name="Canvas", value=f"`{OFFICE_BASE_URL}`", inline=True)
         embed.add_field(name="Session", value=f"`{CANVAS_SESSION_ID}`", inline=True)
         embed.add_field(name="時刻 (JST)", value=now_jst, inline=False)
-        embed.set_footer(text="Claude Office × Commander Bridge")
+        embed.set_footer(text="ミスターDオフィス × 伝書鳩")
         await message.reply(embed=embed, mention_author=False)
 
         # Canvas にも通知
@@ -669,7 +1054,7 @@ class CommanderBridgeBot(discord.Client):
 def _build_status_embed() -> discord.Embed:
     now_jst = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     embed = discord.Embed(
-        title="Commander Bridge — システムステータス",
+        title="伝書鳩 — システムステータス",
         description=f"現在時刻: {now_jst}",
         color=0xD4AF37,
         timestamp=datetime.now(timezone.utc),
@@ -704,13 +1089,13 @@ def _build_status_embed() -> discord.Embed:
         value=str(len(CHANNELS)),
         inline=True,
     )
-    embed.set_footer(text="Claude Office × Commander Bridge")
+    embed.set_footer(text="ミスターDオフィス × 伝書鳩")
     return embed
 
 
 def _build_help_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="Commander Bridge — コマンド一覧",
+        title="伝書鳩 — コマンド一覧",
         description="Discord ↔ Canvas ブリッジシステムの使い方",
         color=0x95A5A6,
         timestamp=datetime.now(timezone.utc),
@@ -730,45 +1115,47 @@ def _build_help_embed() -> discord.Embed:
         value=(
             "`/status` — システムステータス\n"
             "`/ask [部門] [質問]` — 指定部門に質問\n"
-            "`/bridge [メッセージ]` — Canvas に直接ブリッジ送信"
+            "`/bridge [メッセージ]` — Canvas に直接ブリッジ送信\n"
+            "`/relay_panel` — 14部門中継パネル表示"
         ),
         inline=False,
     )
     embed.add_field(
         name="自動機能",
         value=(
-            f"• 部門チャンネルのメッセージ → Canvas 自動転送\n"
-            f"• {HEARTBEAT_INTERVAL // 60}分ごとに Canvas ハートビート送信"
+            f"- 部門チャンネルのメッセージ → Canvas 自動転送\n"
+            f"- 添付ファイル対応 (画像/PDF/MD/txt/動画)\n"
+            f"- {HEARTBEAT_INTERVAL // 60}分ごとに Canvas ハートビート送信\n"
+            f"- 保管庫チャンネル自動管理"
         ),
         inline=False,
     )
-    embed.set_footer(text="Claude Office × Commander Bridge")
+    embed.set_footer(text="ミスターDオフィス × 伝書鳩")
     return embed
 
 
 def _build_dept_list_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="Commander Bridge — 部門キャラクター一覧",
+        title="伝書鳩 — 部門キャラクター一覧",
         description="Canvas に常駐している部門エージェント",
         color=0x3498DB,
         timestamp=datetime.now(timezone.utc),
     )
     lines = []
     for char in CHARACTERS:
-        icon = char["display_name"].split()[0]  # 絵文字部分
+        icon = char["display_name"].split()[0]
         name = char["display_name"].split(" ", 1)[1] if " " in char["display_name"] else char["display_name"]
         color_hex = char["agent_color"]
         model = char.get("model", "sonnet")
         lines.append(f"{icon} **{name}** — `{char['dept_id']}` [{model}]")
     embed.add_field(name="エージェント", value="\n".join(lines), inline=False)
-    embed.set_footer(text="Claude Office × Commander Bridge")
+    embed.set_footer(text="ミスターDオフィス × 伝書鳩")
     return embed
 
 
 # ---------------------------------------------------------------------------
 # スラッシュコマンド登録
 # ---------------------------------------------------------------------------
-# Bot インスタンスを module レベルで持つことで setup_hook 内から参照する
 _bot: CommanderBridgeBot | None = None
 
 
@@ -778,14 +1165,13 @@ def _get_bot() -> CommanderBridgeBot:
     return _bot
 
 
-# スラッシュコマンドはインスタンスに紐づけるため、Bot 生成後に登録する
 def _register_slash_commands(bot: CommanderBridgeBot) -> None:
     tree = bot.tree
     guild_obj = discord.Object(id=GUILD_ID)
 
     @tree.command(
         name="status",
-        description="Commander Bridge のシステムステータスを表示",
+        description="伝書鳩のシステムステータスを表示",
         guild=guild_obj,
     )
     async def slash_status(interaction: discord.Interaction) -> None:
@@ -828,10 +1214,7 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             )
             return
 
-        # Canvas にイベント送信
-        canvas_msg = (
-            f"/ask from {interaction.user.display_name}: {question}"
-        )
+        canvas_msg = f"/ask from {interaction.user.display_name}: {question}"
         ok = await send_canvas_event(
             dept_clean, canvas_msg, event_kind="ASK_STARTED"
         )
@@ -851,7 +1234,6 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         embed.set_footer(text=f"質問者: {interaction.user.display_name}")
         await interaction.followup.send(embed=embed)
 
-        # 3 秒後に完了イベントも送る (ASK_STARTED → ASK_COMPLETED)
         async def _complete_later() -> None:
             await asyncio.sleep(3)
             await send_canvas_event(
@@ -877,7 +1259,6 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         sender = interaction.user.display_name
         full_msg = f"[Bridge from {sender}] {message}"
 
-        # commander チャンネルにも全体ブリッジ通知
         ok = await send_canvas_event(
             "commander", full_msg, event_kind="ASK_COMPLETED"
         )
@@ -904,14 +1285,35 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
                     color=0x00FF88,
                     timestamp=datetime.now(timezone.utc),
                 )
-                log_embed.set_footer(text=f"by {sender}")
+                log_embed.set_footer(text=f"by {sender} | ミスターDオフィス × 伝書鳩")
                 try:
                     await log_ch.send(embed=log_embed)
+                except discord.Forbidden:
+                    log.warning("権限不足: 司令塔ログへの送信失敗")
                 except discord.DiscordException as exc:
-                    log.warning("Failed to send to 司令塔ログ: %s", exc)
+                    log.warning("司令塔ログ送信エラー: %s", exc)
 
-    # bot をクロージャ内で参照するため、ここで代入
-    bot_ref = bot  # noqa: F841
+    @tree.command(
+        name="relay_panel",
+        description="14部門中継パネルを表示する（えむ専用）",
+        guild=guild_obj,
+    )
+    async def slash_relay_panel(interaction: discord.Interaction) -> None:
+        """14部門中継パネルを表示する。ボタンを押すとモーダルが開く。"""
+        embed = discord.Embed(
+            title="14部門 中継パネル",
+            description=(
+                "送信したい部門のボタンを押してください。\n"
+                "メッセージ入力欄が開きます。"
+            ),
+            color=0xD4AF37,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text="ミスターDオフィス × 伝書鳩 | えむ専用指示ツール")
+
+        # 永続 View を使用 (timeout=None)
+        view = RelayPanelView()
+        await interaction.response.send_message(embed=embed, view=view)
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +1336,7 @@ async def _main() -> None:
         sys.exit(1)
 
     log.info("=" * 60)
-    log.info("Commander Bridge Discord Bot 起動")
+    log.info("伝書鳩 Discord Bot 起動")
     log.info("  Canvas URL   : %s", OFFICE_BASE_URL)
     log.info("  Session ID   : %s", CANVAS_SESSION_ID)
     log.info("  Heartbeat    : %ds", HEARTBEAT_INTERVAL)
@@ -942,10 +1344,13 @@ async def _main() -> None:
     log.info("  Characters   : %d", len(CHARACTERS))
     log.info("=" * 60)
 
+    # TASK-06: aiohttp session をBot起動前に作成
+    _get_aiohttp_session()
+    log.info("aiohttp session initialized.")
+
     _bot = CommanderBridgeBot()
     _register_slash_commands(_bot)
 
-    # SIGINT / SIGTERM でグレースフルシャットダウン
     loop = asyncio.get_running_loop()
 
     def _handle_signal(sig: signal.Signals) -> None:
@@ -956,7 +1361,6 @@ async def _main() -> None:
         try:
             loop.add_signal_handler(sig, _handle_signal, sig)
         except NotImplementedError:
-            # Windows では add_signal_handler が使えないので KeyboardInterrupt で対応
             pass
 
     try:
@@ -975,10 +1379,12 @@ async def _main() -> None:
     finally:
         if not _bot.is_closed():
             await _bot.close()
+        # セッションが残っていたら cleanup
+        await _close_aiohttp_session()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
-        log.info("Keyboard interrupt. Bye.")
+        log.info("伝書鳩: Keyboard interrupt. Bye.")

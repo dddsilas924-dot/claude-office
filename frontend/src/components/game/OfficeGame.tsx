@@ -90,6 +90,7 @@ import {
 import { ZoomControls } from "./ZoomControls";
 import { LoadingScreen } from "./LoadingScreen";
 import { OfficeBackground } from "./OfficeBackground";
+import { DiscordTicker } from "./DiscordTicker";
 
 // Register PixiJS components
 extend({ Container, Text, Graphics, Sprite });
@@ -557,6 +558,8 @@ export function OfficeGame(): ReactNode {
                           ? 0x2ecc71
                           : 0x3498db; // default sonnet blue
                     const modelLabel = bridge.model ?? "sonnet";
+                    // Stagger reaction delay: 100ms per sprite index
+                    const staggerDelay = index * 100;
 
                     return (
                       <pixiContainer key={`bridge-${bridge.deptId}`}>
@@ -576,6 +579,11 @@ export function OfficeGame(): ReactNode {
                           renderBubble={false}
                           renderLabel={true}
                           isTyping={bridge.eventKind === "ASK_STARTED"}
+                          reactionAt={bridge.reactionAt}
+                          eventKind={bridge.eventKind}
+                          agentStatus={bridge.agentStatus}
+                          visibility={bridge.visibility}
+                          reactionDelayMs={staggerDelay}
                         />
                         {/* Model badge below agent */}
                         <pixiContainer
@@ -683,6 +691,30 @@ export function OfficeGame(): ReactNode {
           </div>
         </TransformComponent>
       </TransformWrapper>
+
+      {/*
+        Discord Ticker — HTML overlay at the bottom of the canvas area.
+        Positioned absolute inside the container div (which is `relative`).
+        The ticker sits outside TransformWrapper so it doesn't zoom/pan with
+        the canvas — it's a fixed UI chrome element.
+        We anchor to bottom:0 of the container and set the width to match
+        the canvas pixel width so it aligns with the game view.
+      */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: `${CANVAS_WIDTH}px`,
+          pointerEvents: "none",
+        }}
+      >
+        <DiscordTicker
+          canvasWidthPx={CANVAS_WIDTH}
+          canvasHeightPx={CANVAS_HEIGHT}
+        />
+      </div>
     </div>
   );
 }
