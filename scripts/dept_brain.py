@@ -185,6 +185,8 @@ class DeptBrain:
         self._silence_mode = False  # /silence で一時停止
         self._meeting_active = False  # 会議中フラグ
         self._state_write_lock = asyncio.Lock()  # shared_state書き込み排他制御
+        self._memory_cache: dict[str, tuple[float, str]] = {}  # dept_id → (timestamp, content)
+        self._MEMORY_CACHE_TTL = 300  # 5分キャッシュ（ファイルI/O削減）
 
         log.info(
             "DeptBrain 初期化完了: model=%s, cap=$%.0f/月, rate=%d/分",
@@ -417,7 +419,15 @@ class DeptBrain:
         Discord側のAIに注入するための仕組み。
 
         各ファイルは先頭500文字に制限する（トークン爆発防止）。
+        5分間のキャッシュで不要なファイルI/Oを防止。
         """
+        # キャッシュチェック（5分以内なら再読み込みしない）
+        cached = self._memory_cache.get(dept_id)
+        if cached:
+            cache_time, cache_content = cached
+            if time.monotonic() - cache_time < self._MEMORY_CACHE_TTL:
+                return cache_content
+
         mem_dir = self._get_memory_dir()
         if not mem_dir:
             return ""
@@ -434,16 +444,18 @@ class DeptBrain:
             try:
                 text = fpath.read_text(encoding="utf-8")[:500].strip()
                 if text:
-                    # ファイル名からカテゴリを推測
                     label = fname.replace(".md", "").replace("_", " ")
                     parts.append(f"[{label}]\n{text}")
             except OSError:
                 continue
 
         if not parts:
+            self._memory_cache[dept_id] = (time.monotonic(), "")
             return ""
 
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        self._memory_cache[dept_id] = (time.monotonic(), result)
+        return result
 
     def load_all_depts_summary(self) -> str:
         """全部門の状況サマリーを1つの文字列にまとめて返す。"""

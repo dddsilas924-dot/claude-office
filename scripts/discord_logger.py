@@ -31,7 +31,7 @@ JST = timezone(timedelta(hours=9))
 LogType = Literal["respond", "autonomous", "meeting", "instruction", "daily_report"]
 
 # 各制限値
-_MAX_DISCORD_LOG_PER_DEPT = 100    # 部門ごとのdiscord_log最大件数
+_MAX_DISCORD_LOG_PER_DEPT = 15     # 部門ごとのdiscord_log最大件数（shared_state肥大化防止）
 _MAX_PENDING_INSTRUCTIONS = 50     # pending_instructionsの最大件数
 _INSTRUCTION_ARCHIVE_DAYS = 7      # 完了済みinstructionのアーカイブ閾値（日）
 _LOG_RETENTION_DAYS = 30           # ログファイルの保持日数
