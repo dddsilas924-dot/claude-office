@@ -54,6 +54,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
@@ -79,9 +80,24 @@ except ImportError:
     _AUTONOMOUS_AVAILABLE = False
     InstructionEngine = None  # type: ignore[assignment,misc]
     DeptBrain = None  # type: ignore[assignment,misc]
-    DeptScheduler = None  # type: ignore[assignment,misc]
-    MeetingEngine = None  # type: ignore[assignment,misc]
-    MeetingScheduler = None  # type: ignore[assignment,misc]
+
+# Phase 3: 品質・記録・部門間依頼機能
+try:
+    from state_watcher import StateWatcher
+    from memory_bridge import MemoryBridge
+    from notification_controller import NotificationController, NotificationLevel
+    from dept_request import DeptRequestManager
+    from daily_digest import DigestCollector, DigestScheduler
+    _PHASE3_AVAILABLE = True
+except ImportError:
+    _PHASE3_AVAILABLE = False
+    StateWatcher = None  # type: ignore[assignment,misc]
+    MemoryBridge = None  # type: ignore[assignment,misc]
+    NotificationController = None  # type: ignore[assignment,misc]
+    NotificationLevel = None  # type: ignore[assignment,misc]
+    DeptRequestManager = None  # type: ignore[assignment,misc]
+    DigestCollector = None  # type: ignore[assignment,misc]
+    DigestScheduler = None  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
 # .env 読み込み (python-dotenv がなければ手動フォールバック)
@@ -487,7 +503,7 @@ CHANNEL_TOPICS: dict[str, str] = {
 # 改善1: カテゴリ自動整理の構造定義
 # ---------------------------------------------------------------------------
 CATEGORY_STRUCTURE: dict[str, list[str]] = {
-    "🏢 本部": ["一般", "司令塔", "📝日報"],
+    "🏢 本部": ["一般", "司令塔", "📝日報", "📋デイリーダイジェスト"],
     "🤝 会議室": ["会議室"],
     "💼 事業部門": ["コンテンツ部", "デザイン部", "ライティング部", "リサーチ部", "営業部", "広告部"],
     "🚀 特殊部門": ["新規事業部", "AI投資部", "フィルコンサル部", "不動産部"],
@@ -1028,6 +1044,14 @@ class CommanderBridgeBot(discord.Client):
         # --- Phase 2: 指示実行エンジン ---
         self._instruction_engine: InstructionEngine | None = None
 
+        # --- Phase 3: 品質・記録機能 ---
+        self._state_watcher: "StateWatcher | None" = None
+        self._memory_bridge: "MemoryBridge | None" = None
+        self._notification_controller: "NotificationController | None" = None
+        self._dept_request_manager: "DeptRequestManager | None" = None
+        self._digest_collector: "DigestCollector | None" = None
+        self._digest_scheduler: "DigestScheduler | None" = None
+
     # ------------------------------------------------------------------
     # ライフサイクル
     # ------------------------------------------------------------------
@@ -1086,6 +1110,16 @@ class CommanderBridgeBot(discord.Client):
 
         self._ready_event.set()
 
+        # --- Phase 2: 指示実行エンジン初期化（先に初期化 — Scheduler/Meeting が参照） ---
+        try:
+            if InstructionEngine is not None:
+                self._instruction_engine = InstructionEngine()
+                log.info("指示実行エンジン初期化完了 (Phase 2)")
+            else:
+                log.warning("InstructionEngine モジュール未ロード。Phase 2 無効。")
+        except Exception as exc:
+            log.exception("指示実行エンジン初期化エラー: %s", exc)
+
         # --- 自律オフィス初期化 ---
         await self._init_autonomous_office()
 
@@ -1096,15 +1130,8 @@ class CommanderBridgeBot(discord.Client):
         except Exception as exc:
             log.exception("Discordログ記録エンジン初期化エラー: %s", exc)
 
-        # --- Phase 2: 指示実行エンジン初期化 ---
-        try:
-            if InstructionEngine is not None:
-                self._instruction_engine = InstructionEngine()
-                log.info("指示実行エンジン初期化完了 (Phase 2)")
-            else:
-                log.warning("InstructionEngine モジュール未ロード。Phase 2 無効。")
-        except Exception as exc:
-            log.exception("指示実行エンジン初期化エラー: %s", exc)
+        # --- Phase 3: 品質・記録機能初期化 ---
+        await self._init_phase3()
 
         log.info("伝書鳩: 完全起動完了。Heartbeat interval: %ds", HEARTBEAT_INTERVAL)
 
@@ -1127,21 +1154,24 @@ class CommanderBridgeBot(discord.Client):
             self._dept_brain = DeptBrain(api_key=api_key)
             log.info("DeptBrain 初期化完了")
 
-            # スケジューラー (REQ-002: 自発活動)
+            # スケジューラー (REQ-002: 自発活動 + P-09: 実行能力付与)
             self._dept_scheduler = DeptScheduler(
                 brain=self._dept_brain,
                 post_callback=self._post_autonomous_activity,
                 interval_hours=self._dept_brain.config.get("autonomous_interval_hours", 4),
+                instruction_engine=self._instruction_engine,
+                digest_collector=self._digest_collector,
             )
             self._dept_scheduler.start()
             log.info("部門自発活動スケジューラー開始")
 
-            # 会議エンジン (REQ-003: 会議室)
+            # 会議エンジン (REQ-003: 会議室 + P-10: アクション実行)
             self._meeting_engine = MeetingEngine(
                 brain=self._dept_brain,
                 post_callback=self._post_meeting_message,
                 forward_callback=self._forward_action_to_dept,
                 canvas_callback=self._send_meeting_canvas_event,
+                instruction_engine=self._instruction_engine,
             )
 
             # 定期会議スケジューラー
@@ -1165,6 +1195,69 @@ class CommanderBridgeBot(discord.Client):
         except Exception as exc:
             log.exception("自律オフィス初期化エラー: %s", exc)
             self._dept_brain = None
+
+    async def _init_phase3(self) -> None:
+        """Phase 3 コンポーネント（StateWatcher / MemoryBridge / NotificationController）を初期化する。"""
+        if not _PHASE3_AVAILABLE:
+            log.warning("Phase 3 モジュール未ロード。state_watcher / memory_bridge / notification_controller を確認してください。")
+            return
+
+        # NotificationController（依存なし・常に起動）
+        try:
+            self._notification_controller = NotificationController(self)
+            log.info("NotificationController 初期化完了 (Phase 3)")
+        except Exception as exc:
+            log.exception("NotificationController 初期化エラー: %s", exc)
+
+        # MemoryBridge（依存なし・常に起動）
+        try:
+            self._memory_bridge = MemoryBridge()
+            log.info("MemoryBridge 初期化完了 (Phase 3)")
+        except Exception as exc:
+            log.exception("MemoryBridge 初期化エラー: %s", exc)
+
+        # StateWatcher（shared_state.json のパスを dept_brain と同じロジックで解決）
+        try:
+            import os
+            state_path_env = os.environ.get("SHARED_STATE_PATH", "")
+            if state_path_env:
+                state_path = Path(state_path_env)
+            else:
+                state_path = (
+                    Path(__file__).parent.parent.parent
+                    / "empire_monitor_full_20260321"
+                    / ".claude"
+                    / "shared_state.json"
+                )
+            self._state_watcher = StateWatcher(self, state_path=state_path, interval=60)
+            await self._state_watcher.start()
+            log.info("StateWatcher 起動完了 (Phase 3, path=%s)", state_path)
+        except Exception as exc:
+            log.exception("StateWatcher 初期化エラー: %s", exc)
+
+        # DeptRequestManager（P-08: 部門間依頼フロー）
+        try:
+            if self._instruction_engine and DeptRequestManager:
+                self._dept_request_manager = DeptRequestManager(
+                    engine=self._instruction_engine,
+                    bot=self,
+                )
+                log.info("DeptRequestManager 初期化完了 (Phase 3)")
+        except Exception as exc:
+            log.exception("DeptRequestManager 初期化エラー: %s", exc)
+
+        # DigestCollector + DigestScheduler（デイリーダイジェスト）
+        try:
+            if DigestCollector and DigestScheduler:
+                self._digest_collector = DigestCollector()
+                self._digest_scheduler = DigestScheduler(
+                    bot=self,
+                    collector=self._digest_collector,
+                )
+                self._digest_scheduler.start()
+                log.info("デイリーダイジェスト初期化完了 (毎日 21:00 JST)")
+        except Exception as exc:
+            log.exception("デイリーダイジェスト初期化エラー: %s", exc)
 
     async def _handle_dept_ai_response(
         self,
@@ -1249,6 +1342,26 @@ class CommanderBridgeBot(discord.Client):
                     log_type="respond",
                 )
 
+            # Phase 3: memory自動保存 (P-13) → 無効化
+            # 設計方針: Discordは「ホワイトボード（アイデアの場）」。
+            # AI生成テキストにはハルシネーションが含まれる可能性がある。
+            # Claude Code側のmemoryに自動保存すると嘘が「事実」として記録される。
+            # えむが「これ採用」と判断したものだけClaude Codeセッションで手動記録する。
+            # if self._memory_bridge:
+            #     await self._memory_bridge.save_conversation(
+            #         dept_id=dept_id,
+            #         user_msg=content,
+            #         ai_response=response,
+            #     )
+
+            # Phase 3: 部門間依頼自動検出 (P-08)
+            if self._dept_request_manager:
+                await self._dept_request_manager.scan_and_dispatch(
+                    text=response,
+                    from_dept=dept_id,
+                    chain_depth=0,
+                )
+
             log.info(
                 "部門AI返答: %s → %s (%.0f文字)",
                 dept_id, author_name, len(response),
@@ -1315,6 +1428,14 @@ class CommanderBridgeBot(discord.Client):
                     response=text,
                     log_type="autonomous",
                 )
+
+            # デイリーダイジェストに記録
+            if self._digest_collector:
+                msg_url = sent_msg.jump_url if sent_msg else ""
+                if is_deliverable:
+                    self._digest_collector.add_deliverable(dept_id, text, msg_url)
+                else:
+                    self._digest_collector.add_proposal(dept_id, text, msg_url)
 
         except discord.HTTPException as exc:
             log.error("自発活動投稿エラー (%s): %s", dept_id, exc)
@@ -1824,6 +1945,9 @@ class CommanderBridgeBot(discord.Client):
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+        # Phase 3: StateWatcher 停止
+        if self._state_watcher is not None:
+            await self._state_watcher.stop()
         # TASK-06: aiohttp session を cleanup
         await _close_aiohttp_session()
         await super().close()
@@ -2814,6 +2938,313 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         embed.set_footer(text="ミスターDオフィス × Phase 2")
         await interaction.response.send_message(embed=embed)
 
+    # ===================================================================
+    # Phase 3: P-15 dept_lock連携 — /lock, /unlock, /locks
+    # ===================================================================
+
+    @tree.command(name="lock", description="部門をロックする（排他作業開始）")
+    @app_commands.describe(dept="部門ID")
+    async def slash_lock(interaction: discord.Interaction, dept: str) -> None:
+        dept_clean = dept.strip().lower()
+        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+
+        if not lock_file.is_file():
+            await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
+            return
+
+        try:
+            import json as _json
+            data = _json.loads(lock_file.read_text(encoding="utf-8"))
+            depts = data.get("departments", {})
+
+            if dept_clean not in depts:
+                await interaction.response.send_message(
+                    f"部門 `{dept_clean}` は存在しません。\n有効な部門: {', '.join(sorted(depts.keys()))}",
+                    ephemeral=True,
+                )
+                return
+
+            dept_data = depts[dept_clean]
+            existing_lock = dept_data.get("discord_lock")
+            if existing_lock:
+                await interaction.response.send_message(
+                    f"⚠️ `{dept_clean}` は既にロック中です。\n"
+                    f"**ロック者**: {existing_lock.get('holder', '不明')}\n"
+                    f"**開始時刻**: {existing_lock.get('locked_at', '不明')}",
+                    ephemeral=True,
+                )
+                return
+
+            jst = timezone(timedelta(hours=9))
+            now_str = datetime.now(jst).isoformat()
+            dept_data["discord_lock"] = {
+                "holder": str(interaction.user),
+                "locked_at": now_str,
+                "source": "discord",
+            }
+            lock_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            embed = discord.Embed(
+                title=f"🔒 部門ロック: {dept_clean}",
+                description=f"**ロック者**: {interaction.user}\n**時刻**: {now_str}",
+                color=0xF39C12,
+            )
+            embed.set_footer(text="P-15 dept_lock連携")
+            await interaction.response.send_message(embed=embed)
+        except Exception as exc:
+            await interaction.response.send_message(f"ロックエラー: {exc}", ephemeral=True)
+
+    @tree.command(name="unlock", description="部門のロックを解除する")
+    @app_commands.describe(dept="部門ID")
+    async def slash_unlock(interaction: discord.Interaction, dept: str) -> None:
+        dept_clean = dept.strip().lower()
+        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+
+        if not lock_file.is_file():
+            await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
+            return
+
+        try:
+            import json as _json
+            data = _json.loads(lock_file.read_text(encoding="utf-8"))
+            dept_data = data.get("departments", {}).get(dept_clean)
+
+            if not dept_data:
+                await interaction.response.send_message(f"部門 `{dept_clean}` が見つかりません", ephemeral=True)
+                return
+
+            existing_lock = dept_data.get("discord_lock")
+            if not existing_lock:
+                await interaction.response.send_message(f"`{dept_clean}` はロックされていません", ephemeral=True)
+                return
+
+            dept_data.pop("discord_lock", None)
+            lock_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            embed = discord.Embed(
+                title=f"🔓 ロック解除: {dept_clean}",
+                description=f"**解除者**: {interaction.user}",
+                color=0x2ECC71,
+            )
+            embed.set_footer(text="P-15 dept_lock連携")
+            await interaction.response.send_message(embed=embed)
+        except Exception as exc:
+            await interaction.response.send_message(f"ロック解除エラー: {exc}", ephemeral=True)
+
+    @tree.command(name="locks", description="全部門のロック状況を表示")
+    async def slash_locks(interaction: discord.Interaction) -> None:
+        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+
+        if not lock_file.is_file():
+            await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
+            return
+
+        try:
+            import json as _json
+            data = _json.loads(lock_file.read_text(encoding="utf-8"))
+            depts = data.get("departments", {})
+
+            locked = []
+            for dept_id, dept_data in sorted(depts.items()):
+                lock_info = dept_data.get("discord_lock")
+                if lock_info:
+                    locked.append(
+                        f"🔒 **{dept_id}** — {lock_info.get('holder', '不明')} "
+                        f"({lock_info.get('locked_at', '不明')[:16]})"
+                    )
+
+            if not locked:
+                await interaction.response.send_message("現在ロック中の部門はありません ✅", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="部門ロック状況",
+                description="\n".join(locked),
+                color=0xF39C12,
+            )
+            embed.set_footer(text=f"P-15 dept_lock連携 | {len(locked)}件ロック中")
+            await interaction.response.send_message(embed=embed)
+        except Exception as exc:
+            await interaction.response.send_message(f"エラー: {exc}", ephemeral=True)
+
+    # ===================================================================
+    # Phase 3: P-19 ロールバック — /rollback
+    # ===================================================================
+
+    @tree.command(name="rollback", description="最後の実行結果を取り消す（git revert）")
+    @app_commands.describe(inst_id="取り消す指示ID (INST-xxxxx)")
+    async def slash_rollback(interaction: discord.Interaction, inst_id: str) -> None:
+        if not bot._instruction_engine:
+            await interaction.response.send_message("指示実行エンジンが無効です", ephemeral=True)
+            return
+
+        engine = bot._instruction_engine
+        inst = engine.get_queued(inst_id)
+
+        if not inst:
+            await interaction.response.send_message(
+                f"`{inst_id}` が見つかりません。`/pending` で一覧を確認してください",
+                ephemeral=True,
+            )
+            return
+
+        if inst["status"] == "pending":
+            # まだ実行前 → キューから取り消し
+            inst["status"] = "cancelled"
+            embed = discord.Embed(
+                title=f"取り消し完了: {inst_id}",
+                description=(
+                    f"**タスク**: {inst['task'][:100]}\n"
+                    f"**状態**: pending → cancelled（実行前に取り消し）"
+                ),
+                color=0xF39C12,
+            )
+            embed.set_footer(text="P-19 ロールバック")
+            await interaction.response.send_message(embed=embed)
+            return
+
+        if inst["status"] == "completed":
+            # 実行済み → git revertを提案（安全のためclaude -pで実行）
+            await interaction.response.defer(thinking=True)
+            rollback_task = (
+                f"直前の指示 {inst_id} (タスク: {inst['task'][:80]}) の実行結果を確認し、"
+                f"もし変更されたファイルがあれば git revert で元に戻してください。"
+                f"変更がなければ「ロールバック不要」と報告してください。"
+            )
+            result = await engine.execute(rollback_task, inst["dept_id"])
+
+            color = 0x2ECC71 if result["status"] == "success" else 0xE74C3C
+            embed = discord.Embed(
+                title=f"ロールバック結果: {inst_id}",
+                description=(result.get("result", "") or "(結果なし)")[:1800],
+                color=color,
+            )
+            embed.add_field(name="コスト", value=f"${result.get('cost', 0):.4f}", inline=True)
+            embed.set_footer(text="P-19 ロールバック")
+            await interaction.followup.send(embed=embed)
+            return
+
+        await interaction.response.send_message(
+            f"`{inst_id}` の状態は `{inst['status']}` です。ロールバックできません。",
+            ephemeral=True,
+        )
+
+    # ===================================================================
+    # Phase 3: P-20 外部イベント受信 — /webhook
+    # ===================================================================
+
+    @tree.command(name="webhook", description="外部イベントを手動トリガー（GitHub/VPS/cron）")
+    @app_commands.describe(
+        source="イベントソース (github/vps/cron/custom)",
+        event="イベント内容",
+        dept="対応部門ID（省略時: セキュリティ部）",
+    )
+    async def slash_webhook(
+        interaction: discord.Interaction,
+        source: str,
+        event: str,
+        dept: str = "security",
+    ) -> None:
+        dept_clean = dept.strip().lower()
+
+        # 通知先の自動判定
+        source_to_dept: dict[str, str] = {
+            "github": "security",
+            "vps": "security",
+            "cron": "commander",
+            "custom": dept_clean,
+        }
+        target_dept = source_to_dept.get(source.lower(), dept_clean)
+
+        # 部門チャンネルに通知
+        if bot._guild:
+            ch_name_map = {
+                "commander": "司令塔",
+                "security": "セキュリティ部",
+                "research": "リサーチ部",
+                "content": "コンテンツ部",
+                "design": "デザイン部",
+            }
+            ch_name = ch_name_map.get(target_dept, target_dept)
+            ch = discord.utils.get(bot._guild.text_channels, name=ch_name)
+            if ch:
+                ext_embed = discord.Embed(
+                    title=f"外部イベント受信: {source}",
+                    description=event[:1800],
+                    color=0x9B59B6,
+                )
+                ext_embed.add_field(name="ソース", value=source, inline=True)
+                ext_embed.add_field(name="対応部門", value=target_dept, inline=True)
+                ext_embed.set_footer(text="P-20 外部イベント連携")
+                await ch.send(embed=ext_embed)
+
+        # NotificationController経由で司令塔ログにも記録
+        if bot._notification_controller:
+            await bot._notification_controller.notify(
+                level="normal",
+                title=f"外部イベント: {source}",
+                message=f"**内容**: {event[:500]}\n**対応部門**: {target_dept}",
+                dept_id=target_dept,
+            )
+
+        # auto_respond: safeタスクなら自動実行
+        if bot._instruction_engine:
+            classification = bot._instruction_engine.classify(event)
+            if classification == "safe":
+                await interaction.response.defer(thinking=True)
+                result = await bot._instruction_engine.execute(event, target_dept)
+
+                color = 0x2ECC71 if result["status"] == "success" else 0xE74C3C
+                embed = discord.Embed(
+                    title=f"外部イベント自動対応: {source}",
+                    description=(result.get("result", "") or "(結果なし)")[:1800],
+                    color=color,
+                )
+                embed.add_field(name="コスト", value=f"${result.get('cost', 0):.4f}", inline=True)
+                embed.set_footer(text="P-20 外部イベント連携 (auto)")
+                await interaction.followup.send(embed=embed)
+                return
+
+        embed = discord.Embed(
+            title=f"外部イベント登録: {source}",
+            description=f"**内容**: {event[:300]}\n**対応部門**: {target_dept}\n\n通知を該当チャンネルに送信しました。",
+            color=0x9B59B6,
+        )
+        embed.set_footer(text="P-20 外部イベント連携")
+        await interaction.response.send_message(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# P-14: エラー即座報告ヘルパー
+# ---------------------------------------------------------------------------
+
+async def _report_error_to_discord(
+    bot: "CommanderBridgeBot",
+    error_source: str,
+    error_msg: str,
+    dept_id: str | None = None,
+) -> None:
+    """エラーをDiscordの司令塔ログチャンネルに即座報告する。"""
+    if not bot._guild:
+        return
+    cmd_log_ch = discord.utils.get(bot._guild.text_channels, name="司令塔ログ")
+    if not cmd_log_ch:
+        return
+
+    embed = discord.Embed(
+        title=f"エラー: {error_source}",
+        description=error_msg[:1800],
+        color=0xE74C3C,
+    )
+    if dept_id:
+        embed.add_field(name="部門", value=dept_id, inline=True)
+    embed.set_footer(text="自動エラー報告 (P-14)")
+
+    try:
+        await cmd_log_ch.send(embed=embed)
+    except Exception:
+        pass  # エラー報告自体が失敗しても無視
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: バックグラウンド実行ヘルパー
@@ -2874,6 +3305,74 @@ async def _run_and_report(
         embed.set_footer(text="Phase 2 指示実行エンジン")
         await channel.send(embed=embed)
 
+        # P-17: 成果物ファイルをDiscordにアップロード
+        if result["status"] == "success":
+            full_result_text = result.get("result", "")
+            _FILE_PATH_PATTERN = re.compile(
+                r"/Users/[^\s\"']+\.(md|html|pdf|py|txt|csv|json)"
+            )
+            found_paths = _FILE_PATH_PATTERN.findall(
+                full_result_text  # type: ignore[arg-type]
+            )
+            # findall でグループ付きパターンはサフィックスだけ返るので全マッチを取り直す
+            found_full_paths = _FILE_PATH_PATTERN.finditer(full_result_text)
+            upload_files: list[discord.File] = []
+            warned_paths: list[str] = []
+            for m in found_full_paths:
+                fpath = Path(m.group(0))
+                if not fpath.is_file():
+                    continue
+                size_mb = fpath.stat().st_size / (1024 * 1024)
+                if size_mb >= 25:
+                    warned_paths.append(f"{fpath.name} ({size_mb:.1f}MB — 25MB超のためスキップ)")
+                    continue
+                try:
+                    upload_files.append(discord.File(str(fpath), filename=fpath.name))
+                except Exception as fe:
+                    log.warning("ファイルアップロード準備エラー %s: %s", fpath, fe)
+
+            if upload_files:
+                try:
+                    await channel.send(
+                        f"`{inst_id}` 成果物ファイル ({len(upload_files)}件):",
+                        files=upload_files,
+                    )
+                    # 📦部門の成果物チャンネルにも投稿
+                    if bot._guild:
+                        deliv_ch_name_candidates = [
+                            f"📦{dept_id}-成果物",
+                            f"📦{dept_id}の成果物",
+                            f"{dept_id}-deliverables",
+                        ]
+                        for cname in deliv_ch_name_candidates:
+                            deliv_ch = discord.utils.get(
+                                bot._guild.text_channels, name=cname,
+                            )
+                            if deliv_ch and deliv_ch != channel:
+                                # Fileは1度sendすると消費されるので再作成
+                                reupload = []
+                                for f in upload_files:
+                                    try:
+                                        reupload.append(
+                                            discord.File(f.fp.name, filename=f.filename)  # type: ignore[union-attr]
+                                        )
+                                    except Exception:
+                                        pass
+                                if reupload:
+                                    await deliv_ch.send(
+                                        f"`{inst_id}` [{char_name}] 成果物:",
+                                        files=reupload,
+                                    )
+                                break
+                except Exception as ue:
+                    log.error("ファイルアップロードエラー: %s", ue)
+
+            if warned_paths:
+                await channel.send(
+                    "サイズ超過のためアップロードをスキップしたファイル:\n"
+                    + "\n".join(f"- {p}" for p in warned_paths)
+                )
+
         # 司令塔ログにも記録
         if bot._guild:
             cmd_log_ch = discord.utils.get(
@@ -2893,6 +3392,13 @@ async def _run_and_report(
 
     except Exception as exc:
         log.exception("_run_and_report エラー: %s", exc)
+        # P-14: エラーを司令塔ログに即座報告
+        await _report_error_to_discord(
+            bot=bot,
+            error_source=f"_run_and_report ({inst_id})",
+            error_msg=str(exc),
+            dept_id=dept_id,
+        )
         try:
             await channel.send(
                 f"`{inst_id}` 実行中にエラーが発生しました: {exc}"

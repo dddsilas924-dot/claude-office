@@ -25,6 +25,9 @@ from dept_prompts import DEPT_PROMPTS
 
 log = logging.getLogger("dept_meeting")
 
+# [アクション: 部門ID: タスク内容] を抽出する正規表現
+_ACTION_TAG_RE = re.compile(r"\[アクション:\s*([^:]+?):\s*(.+?)\]", re.DOTALL)
+
 JST = timezone(timedelta(hours=9))
 
 
@@ -43,11 +46,13 @@ class MeetingEngine:
         post_callback,    # async def(text: str, dept_id: str, embed_title: str | None)
         forward_callback, # async def(dept_id: str, action_text: str)
         canvas_callback,  # async def(dept_id: str, message: str, event_kind: str)
+        instruction_engine=None,  # InstructionEngine | None
     ):
         self._brain = brain
         self._post = post_callback
         self._forward = forward_callback
         self._canvas = canvas_callback
+        self._instruction_engine = instruction_engine
         self._active = False
         self._current_topic: str | None = None
 
@@ -166,8 +171,11 @@ class MeetingEngine:
                 await self._post(summary, "commander", f"会議まとめ: {topic}")
                 await self._canvas("commander", f"会議まとめ完了: {topic}", "ASK_COMPLETED")
 
-                # アクションアイテムを各部門にフォワード
+                # アクションアイテムを各部門にフォワード（テキスト配布）
                 await self._forward_actions(summary, participants)
+
+                # [アクション: ...] タグを抽出して安全なものを自動実行
+                await self._execute_actions(summary)
             else:
                 await self._post(
                     "会議まとめの生成に失敗しました。議論の記録は上記を参照してください。",
@@ -244,6 +252,68 @@ class MeetingEngine:
                 log.info("アクションフォワード: %s → %s", self._current_topic, dept_id)
 
 
+    async def _execute_actions(self, summary: str) -> None:
+        """
+        サマリーから [アクション: 部門ID: タスク内容] タグを抽出し、
+        承認キューに登録する。
+
+        【安全設計】会議はAI同士の議論であり、人間（えむ）が関与していない。
+        ハルシネーション（捏造タスク）が含まれる可能性がある。
+        そのため classify() の結果に関わらず、会議起源のタスクは
+        **全て承認キュー送り**にする。forbidden だけは即拒否。
+        """
+        if self._instruction_engine is None:
+            return
+
+        matches = _ACTION_TAG_RE.findall(summary)
+        if not matches:
+            log.debug("_execute_actions: [アクション: ...] タグなし → スキップ")
+            return
+
+        log.info("_execute_actions: %d件のアクションタグを検出", len(matches))
+
+        for dept_id_raw, task_raw in matches:
+            dept_id = dept_id_raw.strip().lower()
+            task = task_raw.strip()
+
+            if not task:
+                continue
+
+            # dept_id が実在するか確認
+            if dept_id not in DEPT_PROMPTS:
+                log.warning("不明な部門ID '%s' → スキップ (task=%r)", dept_id, task[:60])
+                continue
+
+            classification = self._instruction_engine.classify(task)
+            log.info(
+                "アクション分類: dept=%s class=%s task=%r",
+                dept_id, classification, task[:60],
+            )
+
+            if classification == "forbidden":
+                notice = (
+                    f"[システム] 会議アクションが禁止パターンに該当したため拒否しました。\n"
+                    f"部門: {dept_id}\nタスク: {task[:80]}"
+                )
+                await self._post(notice, "commander", None)
+                continue
+
+            # 会議起源 → safe でも全て承認キューに送る
+            inst_id = self._instruction_engine.queue_for_approval(
+                dept_id=dept_id,
+                task=task,
+                requester=f"会議アクション ({self._current_topic or 'unknown'})",
+            )
+            notice = (
+                f"[承認待ち] 会議で出たアクションです。\n"
+                f"ID: `{inst_id}` / 部門: {dept_id}\n"
+                f"タスク: {task[:100]}\n"
+                f"`/approve {inst_id}` で実行できます。"
+            )
+            log.info("会議アクション → 承認キュー（会議起源は全て承認必須）: %s", inst_id)
+            await self._post(notice, "commander", None)
+
+
 class MeetingScheduler:
     """
     定期会議のスケジューラー。
@@ -264,7 +334,7 @@ class MeetingScheduler:
         self._topics = [
             "今週の各部門の成果と来週の方針",
             "部門間の連携で改善できること",
-            "えむへの提案事項まとめ",
+            "どらさんへの提案事項まとめ",
             "各部門の課題とボトルネック",
             "新しいビジネスチャンスの共有",
             "コスト削減と効率化のアイデア",

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from dept_brain import DeptBrain
 
 log = logging.getLogger("dept_scheduler")
+
+# [実行依頼: タスク内容] を抽出する正規表現
+_EXEC_REQUEST_RE = re.compile(r"\[実行依頼:\s*(.+?)\]", re.DOTALL)
 
 JST = timezone(timedelta(hours=9))
 
@@ -54,9 +58,13 @@ class DeptScheduler:
         brain: DeptBrain,
         post_callback,  # async def(dept_id: str, text: str, is_deliverable: bool)
         interval_hours: float = 4.0,
+        instruction_engine=None,  # InstructionEngine | None
+        digest_collector=None,    # DigestCollector | None
     ):
         self._brain = brain
         self._post_callback = post_callback
+        self._instruction_engine = instruction_engine
+        self._digest_collector = digest_collector
         self._interval = interval_hours * 3600  # 秒に変換
         self._task: asyncio.Task | None = None
         self._running = False
@@ -91,8 +99,8 @@ class DeptScheduler:
 
     async def _loop(self) -> None:
         """メインループ。interval_hoursごとに全部門を巡回する。"""
-        # 初回は起動後30秒待ってから開始 (Bot起動直後の安定待ち)
-        await asyncio.sleep(30)
+        # 初回は起動後10分待ってから開始（起動直後の一斉発火を防ぐ）
+        await asyncio.sleep(600)
 
         while self._running:
             try:
@@ -154,6 +162,9 @@ class DeptScheduler:
                         text[:50] + "..." if len(text) > 50 else text,
                         " [成果物]" if is_deliv else "",
                     )
+
+                    # [実行依頼: ...] タグが含まれていれば実行エンジンに渡す
+                    await self._handle_exec_request(dept_id, text)
                 else:
                     log.debug("自発活動: %s [%s] → 生成スキップ", dept_id, activity_type)
             except Exception as exc:
@@ -173,7 +184,60 @@ class DeptScheduler:
         if text:
             is_deliv = self._brain.is_deliverable(text)
             await self._post_callback(dept_id, text, is_deliv)
+            await self._handle_exec_request(dept_id, text)
         return text
+
+    async def _handle_exec_request(self, dept_id: str, text: str) -> None:
+        """
+        AIの応答テキストに [実行依頼: タスク内容] タグがあれば InstructionEngine で処理する。
+
+        【安全設計】自発活動はAIが勝手に発言したもの。ハルシネーション（捏造）を含む
+        可能性がある。そのため classify() の結果に関わらず、自発活動起源のタスクは
+        **全て承認キュー送り**にする。safe判定でも自動実行しない。
+        人間（えむ）が /approve で承認した時だけ実行される。
+
+        forbidden だけは即拒否する（承認しても実行できないため）。
+        """
+        if self._instruction_engine is None:
+            return
+
+        match = _EXEC_REQUEST_RE.search(text)
+        if not match:
+            return
+
+        task = match.group(1).strip()
+        if not task:
+            return
+
+        log.info("実行依頼検出（自発活動）: dept=%s task=%r", dept_id, task[:60])
+
+        # forbidden チェックだけは先にやる
+        classification = self._instruction_engine.classify(task)
+
+        if classification == "forbidden":
+            log.warning("実行依頼 → 禁止パターン: dept=%s task=%r", dept_id, task[:60])
+            notice = f"[システム] 実行依頼が禁止パターンに該当したため拒否しました: {task[:80]}"
+            await self._post_callback(dept_id, notice, False)
+            return
+
+        # 自発活動起源 → safe でも approval_required でも全て承認キューに送る
+        inst_id = self._instruction_engine.queue_for_approval(
+            dept_id=dept_id,
+            task=task,
+            requester=f"自発活動 ({dept_id})",
+        )
+        notice = (
+            f"[承認待ち] AIが自発的に提案したタスクです。\n"
+            f"ID: `{inst_id}`\n"
+            f"タスク: {task[:100]}\n"
+            f"実行するには `/approve {inst_id}` で承認してください。"
+        )
+        log.info("実行依頼 → 承認キュー（自発活動は全て承認必須）: %s", inst_id)
+        await self._post_callback(dept_id, notice, False)
+
+        # デイリーダイジェストに記録
+        if self._digest_collector:
+            self._digest_collector.add_pending(inst_id, dept_id, task)
 
 
 def _get_activity_types(hour: int) -> list[str]:
