@@ -144,14 +144,20 @@ log = logging.getLogger("discord_bot")
 # 設定
 # ---------------------------------------------------------------------------
 BOT_TOKEN: str = os.environ.get("DISCORD_BOT_TOKEN", "")
-HMAC_SECRET: str = os.environ.get(
-    "EXTERNAL_EVENT_SECRET", "EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ"
-)
+HMAC_SECRET: str = os.environ.get("EXTERNAL_EVENT_SECRET", "")
+if not HMAC_SECRET:
+    log.warning("EXTERNAL_EVENT_SECRET 未設定。Canvas連携は無効です。.env に設定してください。")
 OFFICE_BASE_URL: str = os.environ.get("OFFICE_BASE_URL", "http://localhost:8000").rstrip("/")
 CANVAS_SESSION_ID: str = os.environ.get("CANVAS_SESSION_ID", "bridge_live")
 HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))  # 秒
 GUILD_ID: int = 1494899621460312145
 JST = timezone(timedelta(hours=9))
+
+# どら（CEO）のDiscord User ID — /run, /approve はこのユーザーのみ実行可能
+ALLOWED_USER_IDS: set[int] = {
+    int(os.environ.get("DISCORD_OWNER_ID", "0")),
+}
+# .env に DISCORD_OWNER_ID が未設定でも、guild owner は自動許可される（on_readyで追加）
 
 # 添付ファイルのテキスト最大文字数
 ATTACHMENT_TEXT_MAX = 2000
@@ -1031,6 +1037,8 @@ class CommanderBridgeBot(discord.Client):
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._guild: discord.Guild | None = None
         self._ready_event = asyncio.Event()
+        self._started_at: float = time.monotonic()  # Bot起動時刻（uptime計算用）
+        self._last_heartbeat: float = 0.0  # 最後のハートビート成功時刻
 
         self._shutdown_requested = False
 
@@ -1083,6 +1091,11 @@ class CommanderBridgeBot(discord.Client):
             log.error("Guild %d not found. Check GUILD_ID.", GUILD_ID)
         else:
             log.info("Guild: %s (%d channels)", self._guild.name, len(self._guild.channels))
+            # Guild owner を自動的に ALLOWED_USER_IDS に追加
+            if self._guild.owner_id:
+                ALLOWED_USER_IDS.discard(0)  # .env未設定時のダミー0を除去
+                ALLOWED_USER_IDS.add(self._guild.owner_id)
+                log.info("Guild owner (id=%d) を ALLOWED_USER_IDS に追加", self._guild.owner_id)
 
             # TASK-02: サーバー名を「ミスターDオフィス」に変更 (冪等)
             await self._ensure_guild_name("ミスターDオフィス")
@@ -2005,12 +2018,35 @@ class CommanderBridgeBot(discord.Client):
                     await asyncio.sleep(0.1)
 
                 log.info("ハートビート完了: %d/%d 更新", success, len(CHARACTERS))
+                self._last_heartbeat = time.monotonic()
+                self._write_health_file()
 
             except asyncio.CancelledError:
                 log.info("伝書鳩: ハートビートループ停止。")
                 break
             except Exception:
                 log.exception("ハートビートループエラー (次回インターバルで再試行)")
+
+    # ------------------------------------------------------------------
+    # Bot ヘルスファイル（外部プロセスから死活確認用）
+    # ------------------------------------------------------------------
+    _HEALTH_FILE = Path("/tmp/claude_office_health.json")
+
+    def _write_health_file(self) -> None:
+        """ヘルスファイルを書き出す。外部スクリプトで mtime を見ればBot生存確認できる。"""
+        try:
+            uptime = time.monotonic() - self._started_at
+            data = {
+                "status": "alive",
+                "uptime_sec": int(uptime),
+                "last_heartbeat": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
+                "guild": self._guild.name if self._guild else None,
+            }
+            self._HEALTH_FILE.write_text(
+                json.dumps(data, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     # ------------------------------------------------------------------
     # TASK-04: メッセージイベント (添付ファイル処理を追加)
@@ -2719,6 +2755,14 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         dept: str,
         task: str,
     ) -> None:
+        # どら本人チェック（セキュリティ: 誰でも実行できてはいけない）
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message(
+                "このコマンドはどら（CEO）専用です。",
+                ephemeral=True,
+            )
+            return
+
         engine = bot._instruction_engine
         if engine is None:
             await interaction.response.send_message(
@@ -2810,6 +2854,14 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         interaction: discord.Interaction,
         inst_id: str,
     ) -> None:
+        # どら本人チェック（セキュリティ: 承認はCEOのみ）
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message(
+                "このコマンドはどら（CEO）専用です。",
+                ephemeral=True,
+            )
+            return
+
         engine = bot._instruction_engine
         if engine is None:
             await interaction.response.send_message(

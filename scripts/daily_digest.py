@@ -341,10 +341,9 @@ class DigestScheduler:
         channel = self._find_channel(self._channel_name)
         if channel is None:
             log.warning(
-                "ダイジェスト: チャンネル「%s」が見つかりません。投稿スキップ",
+                "ダイジェスト: チャンネル「%s」が見つかりません。リセットせず翌日再試行",
                 self._channel_name,
             )
-            self._collector.reset()
             return
 
         try:
@@ -353,11 +352,10 @@ class DigestScheduler:
                 "ダイジェスト投稿完了: %d件 → %s",
                 self._collector.total_count, self._channel_name,
             )
+            # 投稿成功時のみリセット（失敗時は翌日再投稿を試みる）
+            self._collector.reset()
         except _discord.HTTPException as exc:
-            log.error("ダイジェスト投稿エラー: %s", exc)
-
-        # リセット
-        self._collector.reset()
+            log.error("ダイジェスト投稿エラー（リセットせず翌日再試行）: %s", exc)
 
     def _find_channel(self, name: str):
         """名前でテキストチャンネルを検索する。"""

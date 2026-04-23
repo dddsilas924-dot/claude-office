@@ -303,10 +303,11 @@ def build_autonomous_prompt(
     dept_id: str,
     activity_type: str,
     dept_state: dict | None = None,
+    org_summary: str = "",
     memory_context: str = "",
 ) -> str:
     """自発活動用のシステムプロンプトを組み立てる。dept_stateがあれば実データに基づく。"""
-    base = build_system_prompt(dept_id, dept_state, memory_context=memory_context)
+    base = build_system_prompt(dept_id, dept_state, org_summary, memory_context)
     activity_desc = AUTONOMOUS_ACTIVITY_TYPES.get(activity_type, "自由な発信")
 
     if not dept_state:
@@ -392,6 +393,7 @@ def build_meeting_summary_prompt(
     topic: str,
     history: list[dict[str, str]],
     org_summary: str = "",
+    memory_context: str = "",
 ) -> str:
     """会議まとめ用のプロンプト（フィルが使う）。org_summaryで全部門状況を参照可能。"""
     lines = []
@@ -404,6 +406,11 @@ def build_meeting_summary_prompt(
     if org_summary:
         org_section = f"\n【組織全体の状況】\n{org_summary}\n"
 
+    # ドラの判断・フィードバック（司令塔フィル用）
+    memory_section = ""
+    if memory_context:
+        memory_section = f"\n【ドラの判断・フィードバック】\n{memory_context}\n"
+
     return f"""あなたは「フィル」、ミスターDオフィスの司令塔です。
 会議の議論をまとめて、アクションアイテムを明確にしてください。
 
@@ -412,7 +419,7 @@ def build_meeting_summary_prompt(
 
 【議論の全記録】
 {history_text}
-{org_section}
+{org_section}{memory_section}
 
 【まとめのフォーマット】
 以下の形式でまとめてください:

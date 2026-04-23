@@ -101,6 +101,7 @@ class RateLimiter:
 
     async def acquire(self) -> None:
         """レートリミット内なら即座にreturn、超えていたらwait。"""
+        wait_time = 0.0
         async with self._lock:
             now = time.monotonic()
             # 1分以上前のタイムスタンプを除去
@@ -109,27 +110,56 @@ class RateLimiter:
             if len(self._timestamps) >= self._max:
                 # 最も古いリクエストから60秒後まで待つ
                 wait_time = 60.0 - (now - self._timestamps[0])
-                if wait_time > 0:
-                    log.info("レートリミット到達。%.1f秒待機...", wait_time)
-                    await asyncio.sleep(wait_time)
-                    # 待機後に再クリーン
-                    now = time.monotonic()
-                    self._timestamps = [t for t in self._timestamps if now - t < 60.0]
 
-            self._timestamps.append(time.monotonic())
+        # ロック外でsleep（ロック保持中にsleepすると他タスクをブロックする）
+        if wait_time > 0:
+            log.info("レートリミット到達。%.1f秒待機...", wait_time)
+            await asyncio.sleep(wait_time)
+
+        async with self._lock:
+            now = time.monotonic()
+            self._timestamps = [t for t in self._timestamps if now - t < 60.0]
+            self._timestamps.append(now)
 
 
 # ---------------------------------------------------------------------------
 # コストトラッカー
 # ---------------------------------------------------------------------------
 class CostTracker:
-    """月間APIコストを追跡する。"""
+    """月間APIコストを追跡する。永続化ファイルで再起動時もコストを引き継ぐ。"""
+
+    _PERSIST_FILE = Path("/tmp/claude_office_cost.json")
 
     def __init__(self, monthly_cap: float = 30.0):
         self._monthly_cap = monthly_cap
         self._monthly_cost = 0.0
         self._current_month: str = ""
         self._lock = asyncio.Lock()
+        self._load_persisted()
+
+    def _load_persisted(self) -> None:
+        """永続化ファイルからコストを復元する。"""
+        if not self._PERSIST_FILE.is_file():
+            return
+        try:
+            data = json.loads(self._PERSIST_FILE.read_text(encoding="utf-8"))
+            month_key = datetime.now(timezone.utc).strftime("%Y-%m")
+            if data.get("month") == month_key:
+                self._monthly_cost = data.get("cost", 0.0)
+                self._current_month = month_key
+                log.info("コスト復元: %s = $%.4f", month_key, self._monthly_cost)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    def _persist(self) -> None:
+        """コストを永続化ファイルに保存する。"""
+        try:
+            self._PERSIST_FILE.write_text(
+                json.dumps({"month": self._current_month, "cost": self._monthly_cost}),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     async def add_cost(self, input_tokens: int, output_tokens: int, config: dict) -> None:
         """APIコールのコストを加算する。"""
@@ -143,6 +173,7 @@ class CostTracker:
             cost_input = (input_tokens / 1_000_000) * config.get("cost_per_1m_input", 3.0)
             cost_output = (output_tokens / 1_000_000) * config.get("cost_per_1m_output", 15.0)
             self._monthly_cost += cost_input + cost_output
+            self._persist()
 
     async def can_proceed(self) -> bool:
         """コスト上限に達していないか確認する。"""
@@ -196,6 +227,28 @@ class DeptBrain:
         )
 
     # ------------------------------------------------------------------
+    # サニタイズ（Prompt Injection対策）
+    # ------------------------------------------------------------------
+    _INJECTION_PATTERNS = re.compile(
+        r"(?:system\s*:|<\s*system|ignore\s+(?:previous|above)|"
+        r"you\s+are\s+now|pretend\s+(?:you|to)|override\s+instructions|"
+        r"new\s+instructions|admin\s+mode|developer\s+mode)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _sanitize_context(cls, context: list[dict[str, str]]) -> list[dict[str, str]]:
+        """コンテキスト履歴からインジェクション試行を無害化する。"""
+        clean = []
+        for msg in context:
+            content = msg.get("content", "")
+            if cls._INJECTION_PATTERNS.search(content):
+                log.warning("Prompt injection候補を検出・除去: %s", content[:80])
+                content = "[ユーザーメッセージ（安全上省略）]"
+            clean.append({"role": msg.get("role", "user"), "content": content})
+        return clean
+
+    # ------------------------------------------------------------------
     # 公開API
     # ------------------------------------------------------------------
 
@@ -228,13 +281,9 @@ class DeptBrain:
         memory_context = self.load_dept_memory(dept_id)
         system_prompt = build_system_prompt(dept_id, dept_state, org_summary, memory_context)
 
-        # コンテキスト+新メッセージを組み立て
-        messages = []
-        for ctx in context[-self._config["context_history_limit"]:]:
-            messages.append({
-                "role": ctx.get("role", "user"),
-                "content": ctx.get("content", ""),
-            })
+        # コンテキスト+新メッセージを組み立て（サニタイズ済み）
+        sanitized = self._sanitize_context(context[-self._config["context_history_limit"]:])
+        messages = list(sanitized)
         messages.append({
             "role": "user",
             "content": f"[{sender}]: {message}",
@@ -268,19 +317,26 @@ class DeptBrain:
             log.debug("会議中: %s の自発活動をスキップ", dept_id)
             return None
 
-        # 深夜チェック
+        # 深夜チェック（日またぎ対応: start=23, end=7 なら 23:00-07:00 が静音）
         jst = timezone(timedelta(hours=9))
         now_jst = datetime.now(jst)
         quiet = self._config["quiet_hours"]
-        if quiet["start"] <= now_jst.hour < quiet["end"]:
+        q_start, q_end = quiet["start"], quiet["end"]
+        if q_start <= q_end:
+            is_quiet = q_start <= now_jst.hour < q_end
+        else:
+            # 日またぎ: start > end → start..24 OR 0..end
+            is_quiet = now_jst.hour >= q_start or now_jst.hour < q_end
+        if is_quiet:
             log.debug("静音時間帯 (%02d:00 JST): %s をスキップ", now_jst.hour, dept_id)
             return None
 
         # shared_state + memory からドラの最新判断を取得
         dept_state = self._load_dept_state(dept_id)
+        org_summary = self.load_all_depts_summary()
         memory_context = self.load_dept_memory(dept_id)
 
-        system_prompt = build_autonomous_prompt(dept_id, activity_type, dept_state, memory_context)
+        system_prompt = build_autonomous_prompt(dept_id, activity_type, dept_state, org_summary, memory_context)
         messages = [{"role": "user", "content": "自発的に発言してください。"}]
 
         result = await self._call_api(system_prompt, messages, dept_id, "autonomous")
@@ -495,25 +551,8 @@ class DeptBrain:
         if not state_path.is_file():
             return
 
-        # Discord部門ID → shared_stateキー
-        dept_map = {
-            "commander": "commander",
-            "research": "research",
-            "sales": "sales",
-            "design": "design",
-            "content": "content",
-            "writing": "writing",
-            "advertising": "advertising",
-            "ai_investment": "ai_investment",
-            "new_biz": "new_biz",
-            "phil_consulting": "phil_consulting",
-            "security": "security",
-            "takumi_x": "takumi_x",
-            "real_estate": "real_estate",
-            "doradora_sns": "doradora_sns",
-            "origin_story": "origin_story",
-        }
-        key = dept_map.get(dept_id, dept_id)
+        # Discord部門ID → shared_stateキー（クラス定数 _DEPT_MAP を再利用）
+        key = self._DEPT_MAP.get(dept_id, dept_id)
 
         jst = timezone(timedelta(hours=9))
         now_jst = datetime.now(jst).strftime("%Y-%m-%d %H:%M")
@@ -618,9 +657,10 @@ class DeptBrain:
         topic: str,
         history: list[dict[str, str]],
     ) -> str | None:
-        """会議のまとめをフィルとして生成する。全部門状況も参照する。"""
+        """会議のまとめをフィルとして生成する。全部門状況 + ドラのmemoryも参照する。"""
         org_summary = self.load_all_depts_summary()
-        system_prompt = build_meeting_summary_prompt(topic, history, org_summary)
+        memory_context = self.load_dept_memory("commander")
+        system_prompt = build_meeting_summary_prompt(topic, history, org_summary, memory_context)
         messages = [{"role": "user", "content": "会議をまとめてください。"}]
 
         result = await self._call_api(

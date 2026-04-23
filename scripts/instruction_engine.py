@@ -56,15 +56,16 @@ APPROVAL_PATTERNS: list[str] = [
     "デプロイ", "設定変更",
 ]
 
-# 絶対禁止（破壊的・機密・不可逆）
-FORBIDDEN_PATTERNS: list[str] = [
-    ".env", "環境変数", "API_KEY", "TOKEN", "SECRET",
-    "rm -rf", "rm -r", "rmdir", "delete", "DROP",
-    "外部送信", "メール", "email", "mail",
-    "passwd", "sudo", "chmod 777",
-    "format", "fdisk", "mkfs",
-    "curl.*POST", "wget.*-O",
+# 絶対禁止（破壊的・機密・不可逆） — コンパイル済み正規表現
+_FORBIDDEN_RAW: list[str] = [
+    r"\.env\b", r"環境変数", r"\bAPI_KEY\b", r"\bTOKEN\b", r"\bSECRET\b",
+    r"\brm\s+-rf\b", r"\brm\s+-r\b", r"\brmdir\b", r"\bDELETE\b", r"\bDROP\b",
+    r"外部送信", r"メール", r"\bemail\b", r"\bmail\b",
+    r"\bpasswd\b", r"\bsudo\b", r"chmod\s+777",
+    r"\bformat\b", r"\bfdisk\b", r"\bmkfs\b",
+    r"\bcurl\b.*\bPOST\b", r"\bwget\b.*-O\b",
 ]
+FORBIDDEN_PATTERNS: list[re.Pattern] = [re.compile(p, re.IGNORECASE) for p in _FORBIDDEN_RAW]
 
 # ---------------------------------------------------------------------------
 # 承認待ちキュー（メモリ + shared_state永続化）
@@ -124,10 +125,10 @@ class InstructionEngine:
         """
         task_lower = task.lower()
 
-        # 1. 禁止パターンチェック（最優先）
+        # 1. 禁止パターンチェック（最優先 — コンパイル済み正規表現）
         for pattern in FORBIDDEN_PATTERNS:
-            if re.search(pattern, task_lower, re.IGNORECASE):
-                log.warning("禁止パターン検出: %r in %r", pattern, task[:50])
+            if pattern.search(task_lower):
+                log.warning("禁止パターン検出: %r in %r", pattern.pattern, task[:50])
                 return "forbidden"
 
         # 2. 承認パターンチェック

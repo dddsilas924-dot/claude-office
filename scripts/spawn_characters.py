@@ -86,7 +86,7 @@ CHARACTERS = [
         "display_name": "🚀 タダシ（新規事業）",
         "agent_color": "#1ABC9C",
         "event_kind": "ASK_STARTED",
-        "message": "ソースチェーン分析の商品化検討中。えむ壁打ち待ち。",
+        "message": "ソースチェーン分析の商品化検討中。どらさん壁打ち待ち。",
         "model": "sonnet",
     },
     {

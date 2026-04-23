@@ -136,6 +136,49 @@ class DiscordLogger:
             return False
 
     # --------------------------------------------------------------------------
+    # discord_state.json 分離ファイル（shared_state汚染防止）
+    # --------------------------------------------------------------------------
+
+    def _discord_state_path(self) -> Path | None:
+        """discord_state.json のパスを返す。logs/ の隣に置く。"""
+        logs_dir = self._logs_dir()
+        if not logs_dir:
+            return None
+        return logs_dir / "discord_state.json"
+
+    async def _write_discord_log(self, dept_id: str, entry: dict) -> None:
+        """discord_log を分離ファイルに書き込む（shared_stateを汚さない）。"""
+        dstate_path = self._discord_state_path()
+        if not dstate_path:
+            return
+
+        try:
+            async with self._lock:
+                # 既存データ読み込み
+                if dstate_path.is_file():
+                    with dstate_path.open(encoding="utf-8") as f:
+                        dstate = json.load(f)
+                else:
+                    dstate = {}
+
+                dept_log: list = dstate.setdefault(dept_id, [])
+                dept_log.append(entry)
+
+                # 最大件数を超えた分は古い順に削除
+                if len(dept_log) > _MAX_DISCORD_LOG_PER_DEPT:
+                    dstate[dept_id] = dept_log[-_MAX_DISCORD_LOG_PER_DEPT:]
+
+                # 書き込み
+                dstate_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dstate_path.with_suffix(".tmp")
+                with tmp.open("w", encoding="utf-8") as f:
+                    json.dump(dstate, f, ensure_ascii=False, indent=2)
+                tmp.replace(dstate_path)
+
+        except Exception as exc:
+            log.error("discord_state.json書き込みエラー: %s", exc)
+
+    # --------------------------------------------------------------------------
     # JSONLファイルへの追記
     # --------------------------------------------------------------------------
 
@@ -193,22 +236,9 @@ class DiscordLogger:
         # 1. JSONLファイルに追記（先にファイルへ。shared_stateより軽い処理）
         await self._append_jsonl(entry)
 
-        # 2. shared_state.jsonを更新
-        data = await self._read_state()
-        if data is None:
-            return
-
-        departments = data.setdefault("departments", {})
-        dept = departments.setdefault(dept_id, {})
-        discord_log: list = dept.setdefault("discord_log", [])
-
-        discord_log.append(entry)
-
-        # 最大件数を超えた分は古い順に削除
-        if len(discord_log) > _MAX_DISCORD_LOG_PER_DEPT:
-            dept["discord_log"] = discord_log[-_MAX_DISCORD_LOG_PER_DEPT:]
-
-        await self._write_state(data)
+        # 2. 分離ファイル (discord_state.json) に discord_log を書き込む
+        #    shared_state.json には書かない（肥大化防止 + 書き込み競合防止）
+        await self._write_discord_log(dept_id, entry)
         log.debug("会話ログ記録: dept=%s type=%s", dept_id, log_type)
 
     async def log_instruction(
