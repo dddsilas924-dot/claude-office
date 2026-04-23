@@ -199,6 +199,25 @@ def _format_dept_state(dept_state: dict | None) -> str:
             parts.append(f"注意事項: {wa}")
     if dept_state.get("last_output"):
         parts.append(f"最新の出力: {dept_state['last_output'][:100]}")
+
+    # --- ドラの判断・方針（Claude Code側で記録されたもの）---
+    if dept_state.get("decisions"):
+        d = dept_state["decisions"]
+        if isinstance(d, list):
+            parts.append("ドラの判断・決定事項:\n" + "\n".join(f"  - {x}" for x in d[:5]))
+        else:
+            parts.append(f"ドラの判断: {d}")
+    if dept_state.get("current_strategy"):
+        parts.append(f"現在の方針: {dept_state['current_strategy']}")
+    if dept_state.get("dora_directives"):
+        dd = dept_state["dora_directives"]
+        if isinstance(dd, list):
+            parts.append("ドラからの指示:\n" + "\n".join(f"  - {x}" for x in dd[:5]))
+        else:
+            parts.append(f"ドラからの指示: {dd}")
+    if dept_state.get("phase"):
+        parts.append(f"現在フェーズ: {dept_state['phase']}")
+
     return "\n".join(parts)
 
 
@@ -229,6 +248,7 @@ def build_system_prompt(
     dept_id: str,
     dept_state: dict | None = None,
     org_summary: str = "",
+    memory_context: str = "",
 ) -> str:
     """部門IDからシステムプロンプトを組み立てる。dept_stateがあれば実データも含める。"""
     info = DEPT_PROMPTS.get(dept_id)
@@ -248,6 +268,10 @@ def build_system_prompt(
     if org_summary:
         org_section = f"\n【組織全体の状況（shared_state最新）】\nどらさん（CEO）がClaude Codeセッションで各部門に指示を出しており、以下が全部門の最新状況:\n{org_summary}\nこの情報を元に「どらさんが何をしているか」「他部門が何をしているか」を把握した上で返答すること。"
 
+    memory_section = ""
+    if memory_context:
+        memory_section = f"\n【ドラの判断・フィードバック（Claude Code側の記録）】\n以下はどらさんがClaude Codeセッションで記録した判断・方針・フィードバック。これが最新の方向性。古い情報より優先しろ。\n{memory_context}"
+
     return f"""あなたは「{info['name']}」、ミスターDオフィスの{info['role']}です。
 
 【性格】
@@ -261,6 +285,7 @@ def build_system_prompt(
 {activity_section}
 {state_section}
 {org_section}
+{memory_section}
 
 【会話ルール】
 - Discordのチャットで同僚と話してるテンションで。報告書じゃない。社内チャット。
@@ -278,9 +303,10 @@ def build_autonomous_prompt(
     dept_id: str,
     activity_type: str,
     dept_state: dict | None = None,
+    memory_context: str = "",
 ) -> str:
     """自発活動用のシステムプロンプトを組み立てる。dept_stateがあれば実データに基づく。"""
-    base = build_system_prompt(dept_id, dept_state)
+    base = build_system_prompt(dept_id, dept_state, memory_context=memory_context)
     activity_desc = AUTONOMOUS_ACTIVITY_TYPES.get(activity_type, "自由な発信")
 
     if not dept_state:
@@ -317,9 +343,10 @@ def build_meeting_prompt(
     history: list[dict[str, str]],
     dept_state: dict | None = None,
     org_summary: str = "",
+    memory_context: str = "",
 ) -> str:
     """会議室発言用のシステムプロンプトを組み立てる。dept_stateで実データ注入。org_summaryで全部門の状況を参照可能。"""
-    base = build_system_prompt(dept_id, dept_state)
+    base = build_system_prompt(dept_id, dept_state, memory_context=memory_context)
 
     history_text = ""
     if history:

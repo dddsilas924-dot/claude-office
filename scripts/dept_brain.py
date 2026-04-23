@@ -220,10 +220,11 @@ class DeptBrain:
             log.warning("未知の部門ID: %s", dept_id)
             return None
 
-        # shared_state から実データを取得して返答にも反映
+        # shared_state + memory から実データ・ドラの判断を取得して返答に反映
         dept_state = self._load_dept_state(dept_id)
         org_summary = self.load_all_depts_summary()
-        system_prompt = build_system_prompt(dept_id, dept_state, org_summary)
+        memory_context = self.load_dept_memory(dept_id)
+        system_prompt = build_system_prompt(dept_id, dept_state, org_summary, memory_context)
 
         # コンテキスト+新メッセージを組み立て
         messages = []
@@ -273,10 +274,11 @@ class DeptBrain:
             log.debug("静音時間帯 (%02d:00 JST): %s をスキップ", now_jst.hour, dept_id)
             return None
 
-        # shared_state.json から部門の実データを取得
+        # shared_state + memory からドラの最新判断を取得
         dept_state = self._load_dept_state(dept_id)
+        memory_context = self.load_dept_memory(dept_id)
 
-        system_prompt = build_autonomous_prompt(dept_id, activity_type, dept_state)
+        system_prompt = build_autonomous_prompt(dept_id, activity_type, dept_state, memory_context)
         messages = [{"role": "user", "content": "自発的に発言してください。"}]
 
         result = await self._call_api(system_prompt, messages, dept_id, "autonomous")
@@ -330,6 +332,118 @@ class DeptBrain:
             return None
         key = self._DEPT_MAP.get(dept_id, dept_id)
         return data.get("departments", {}).get(key)
+
+    # ------------------------------------------------------------------
+    # 部門ごとの関連memoryファイル（Claude Code側のドラの判断・フィードバック）
+    # ------------------------------------------------------------------
+    _DEPT_MEMORY_MAP: dict[str, list[str]] = {
+        "commander": [
+            "user_vision_core.md",
+            "project_org_structure.md",
+            "project_sales_map.md",
+            "feedback_dev_decisions_delegate.md",
+        ],
+        "research": [
+            "feedback_genius_research_output.md",
+            "feedback_no_inflation_to_em.md",
+            "project_research_engine_design.md",
+            "feedback_em_research_method.md",
+        ],
+        "sales": [
+            "project_sales_map.md",
+            "project_offline_sales_insight.md",
+            "feedback_responsibility_escape.md",
+        ],
+        "design": [
+            "project_design_system.md",
+            "feedback_html_design_template.md",
+        ],
+        "content": [
+            "project_content_v2.md",
+            "project_three_channels.md",
+            "feedback_script_design_rules.md",
+            "feedback_grade3_literacy.md",
+        ],
+        "writing": [
+            "project_writing_reception_framework.md",
+            "feedback_grade3_literacy.md",
+            "feedback_writing_skill_selection.md",
+        ],
+        "advertising": [
+            "project_sales_map.md",
+        ],
+        "ai_investment": [
+            "project_ai_em_investment_agent.md",
+            "project_ai_investment_telegram_bot.md",
+            "feedback_ai_news_stock_pattern.md",
+        ],
+        "new_biz": [
+            "user_vision_core.md",
+            "project_em_product_vision_20260417.md",
+            "feedback_niche_is_ai_template.md",
+        ],
+        "phil_consulting": [
+            "project_phil_consulting.md",
+            "project_real_estate_school.md",
+            "feedback_phil_learning_method.md",
+        ],
+        "security": [],
+        "takumi_x": [
+            "feedback_ai_bot_frozen.md",
+        ],
+        "real_estate": [
+            "project_real_estate_ai.md",
+            "project_hermes_fudosan.md",
+            "project_mariko_dora_strategy.md",
+        ],
+        "doradora_sns": [
+            "feedback_persona_split.md",
+        ],
+        "origin_story": [
+            "user_identity_story.md",
+        ],
+    }
+
+    def _get_memory_dir(self) -> Path | None:
+        """Claude Codeのプロジェクトmemoryディレクトリを返す。"""
+        mem_dir = Path.home() / ".claude" / "projects" / "-Users-satts924-Downloads-empire-monitor-full-20260321" / "memory"
+        return mem_dir if mem_dir.is_dir() else None
+
+    def load_dept_memory(self, dept_id: str) -> str:
+        """
+        部門に関連するmemoryファイルを読み込んで文字列として返す。
+
+        Claude Code側でドラが記録した判断・フィードバック・方針を
+        Discord側のAIに注入するための仕組み。
+
+        各ファイルは先頭500文字に制限する（トークン爆発防止）。
+        """
+        mem_dir = self._get_memory_dir()
+        if not mem_dir:
+            return ""
+
+        refs = self._DEPT_MEMORY_MAP.get(dept_id, [])
+        if not refs:
+            return ""
+
+        parts: list[str] = []
+        for fname in refs:
+            fpath = mem_dir / fname
+            if not fpath.is_file():
+                continue
+            try:
+                text = fpath.read_text(encoding="utf-8")[:500].strip()
+                if text:
+                    # ファイル名からカテゴリを推測
+                    label = fname.replace(".md", "").replace("_", " ")
+                    parts.append(f"[{label}]\n{text}")
+            except OSError:
+                continue
+
+        if not parts:
+            return ""
+
+        return "\n\n".join(parts)
 
     def load_all_depts_summary(self) -> str:
         """全部門の状況サマリーを1つの文字列にまとめて返す。"""
@@ -475,10 +589,11 @@ class DeptBrain:
         Returns:
             発言テキスト。
         """
-        # 会議発言にも実データと全部門状況を注入
+        # 会議発言にも実データ + memory + 全部門状況を注入
         dept_state = self._load_dept_state(current_dept)
         org_summary = self.load_all_depts_summary()
-        system_prompt = build_meeting_prompt(current_dept, topic, round_num, history, dept_state, org_summary)
+        memory_context = self.load_dept_memory(current_dept)
+        system_prompt = build_meeting_prompt(current_dept, topic, round_num, history, dept_state, org_summary, memory_context)
         messages = [{"role": "user", "content": f"会議議題「{topic}」について発言してください。"}]
 
         result = await self._call_api(system_prompt, messages, current_dept, "meeting")
