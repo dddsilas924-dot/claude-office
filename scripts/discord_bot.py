@@ -71,9 +71,13 @@ try:
     from dept_prompts import DEPT_PROMPTS as AI_DEPT_PROMPTS
     from dept_scheduler import DeptScheduler
     from dept_meeting import MeetingEngine, MeetingScheduler
+    from daily_report import DailyReportEngine
+    from discord_logger import DiscordLogger
+    from instruction_engine import InstructionEngine
     _AUTONOMOUS_AVAILABLE = True
 except ImportError:
     _AUTONOMOUS_AVAILABLE = False
+    InstructionEngine = None  # type: ignore[assignment,misc]
     DeptBrain = None  # type: ignore[assignment,misc]
     DeptScheduler = None  # type: ignore[assignment,misc]
     MeetingEngine = None  # type: ignore[assignment,misc]
@@ -97,13 +101,13 @@ def _load_dotenv(path: Path) -> None:
             key, _, val = line.partition("=")
             key = key.strip()
             val = val.strip().strip('"').strip("'")
-            if key and key not in os.environ:
+            if key:
                 os.environ[key] = val
 
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(_ENV_FILE)
+    load_dotenv(_ENV_FILE, override=True)
 except ImportError:
     _load_dotenv(_ENV_FILE)
 
@@ -367,7 +371,7 @@ RELAY_DEPT_TO_CHANNEL: dict[str, str] = {
 HEARTBEAT_MESSAGES: dict[str, list[str]] = {
     "commander": [
         "全部門の稼働状況を確認中。Canvas 接続良好。",
-        "えむの就寝中も全部門スタンバイ。",
+        "どらの就寝中も全部門スタンバイ。",
         "Discord ↔ Canvas ブリッジ正常稼働中。",
     ],
     "research": [
@@ -407,7 +411,7 @@ HEARTBEAT_MESSAGES: dict[str, list[str]] = {
     ],
     "new_biz": [
         "新規事業評価フレームワーク待機中。",
-        "えむのビジョン 3 フェーズ整合チェック準備完了。",
+        "どらのビジョン 3 フェーズ整合チェック準備完了。",
         "壁打ちモード待機中。いつでも構造化して返す。",
     ],
     "bridge": [
@@ -457,7 +461,7 @@ DEPT_BUTTON_STYLE: dict[str, discord.ButtonStyle] = {
 # 改善3: チャンネルtopics定義
 # ---------------------------------------------------------------------------
 CHANNEL_TOPICS: dict[str, str] = {
-    "司令塔": "えむ → フィル → 各部門。全体指揮・戦略判断",
+    "司令塔": "どら → フィル → 各部門。全体指揮・戦略判断",
     "司令塔ログ": "Bot自動ログ・イベント記録",
     "会議室": "部門間連携・プロジェクト横断ミーティング",
     "一般": "雑談・お知らせ・フリートーク",
@@ -472,23 +476,24 @@ CHANNEL_TOPICS: dict[str, str] = {
     "フィルコンサル部": "コンサル・カリキュラム・受講者対応",
     "不動産部": "不動産AI秘書・スクール企画",
     "タクミX部": "タクミX自動投稿・画像生成",
-    "どらどらSNS部": "えむ本人SNS運用",
-    "コピーロボット部": "えむペルソナ管理・口調分析",
+    "どらどらSNS部": "どら本人SNS運用",
+    "コピーロボット部": "どらペルソナ管理・口調分析",
     "セキュリティ部": "セキュリティ監視・依存パッケージ管理",
     "📊ステータス": "部門稼働状況ダッシュボード（自動更新）",
-    "📝日報": "日次レポート・daily_log連携（Phase 2）",
+    "📝日報": "フィルの日報(22:00自動) + どらの日報(/nippo)",
 }
 
 # ---------------------------------------------------------------------------
 # 改善1: カテゴリ自動整理の構造定義
 # ---------------------------------------------------------------------------
 CATEGORY_STRUCTURE: dict[str, list[str]] = {
-    "🏢 本部": ["司令塔", "司令塔ログ", "📊ステータス", "📝日報", "会議室", "一般"],
+    "🏢 本部": ["一般", "司令塔", "📝日報"],
+    "🤝 会議室": ["会議室"],
     "💼 事業部門": ["コンテンツ部", "デザイン部", "ライティング部", "リサーチ部", "営業部", "広告部"],
     "🚀 特殊部門": ["新規事業部", "AI投資部", "フィルコンサル部", "不動産部"],
     "📣 SNS・ブランディング": ["タクミX部", "どらどらSNS部", "コピーロボット部"],
-    "🔒 管理": ["セキュリティ部"],
     "📦 保管庫": ["📦ドラの成果物", "📦部門の成果物"],
+    "🔧 システム管理": ["📊ステータス", "司令塔ログ", "セキュリティ部"],
 }
 
 # ---------------------------------------------------------------------------
@@ -1018,6 +1023,10 @@ class CommanderBridgeBot(discord.Client):
         self._dept_scheduler: DeptScheduler | None = None
         self._meeting_engine: MeetingEngine | None = None
         self._meeting_scheduler: MeetingScheduler | None = None
+        self._discord_logger: DiscordLogger | None = None
+
+        # --- Phase 2: 指示実行エンジン ---
+        self._instruction_engine: InstructionEngine | None = None
 
     # ------------------------------------------------------------------
     # ライフサイクル
@@ -1080,6 +1089,23 @@ class CommanderBridgeBot(discord.Client):
         # --- 自律オフィス初期化 ---
         await self._init_autonomous_office()
 
+        # --- ログ記録エンジン (APIキー不要 — 常に動かす) ---
+        try:
+            self._discord_logger = DiscordLogger()
+            log.info("Discordログ記録エンジン初期化完了")
+        except Exception as exc:
+            log.exception("Discordログ記録エンジン初期化エラー: %s", exc)
+
+        # --- Phase 2: 指示実行エンジン初期化 ---
+        try:
+            if InstructionEngine is not None:
+                self._instruction_engine = InstructionEngine()
+                log.info("指示実行エンジン初期化完了 (Phase 2)")
+            else:
+                log.warning("InstructionEngine モジュール未ロード。Phase 2 無効。")
+        except Exception as exc:
+            log.exception("指示実行エンジン初期化エラー: %s", exc)
+
         log.info("伝書鳩: 完全起動完了。Heartbeat interval: %ds", HEARTBEAT_INTERVAL)
 
     # ------------------------------------------------------------------
@@ -1126,6 +1152,15 @@ class CommanderBridgeBot(discord.Client):
             )
             self._meeting_scheduler.start()
             log.info("定期会議スケジューラー開始 (毎日 %02d:00 JST)", schedule_hour)
+
+            # 日報エンジン (フィル日報22:00 + どら/nippoコマンド)
+            self._daily_report = DailyReportEngine(
+                brain=self._dept_brain,
+                post_callback=self._post_daily_report,
+                report_hour=22,
+            )
+            self._daily_report.start()
+            log.info("日報エンジン開始 (フィル日報: 毎日 22:00 JST)")
 
         except Exception as exc:
             log.exception("自律オフィス初期化エラー: %s", exc)
@@ -1181,7 +1216,7 @@ class CommanderBridgeBot(discord.Client):
                 timestamp=datetime.now(timezone.utc),
             )
             embed.set_author(
-                name=char["display_name"],
+                name=f"{char['display_name']} (返答)",
             )
             embed.set_footer(text="ミスターDオフィス AI返答")
 
@@ -1201,6 +1236,17 @@ class CommanderBridgeBot(discord.Client):
                     text=response,
                     source_message=message,
                     is_relay=False,
+                )
+
+            # ログ記録
+            if self._discord_logger:
+                await self._discord_logger.log_conversation(
+                    dept_id=dept_id,
+                    channel=message.channel.name if hasattr(message.channel, 'name') else str(message.channel.id),
+                    sender=author_name,
+                    message=content,
+                    response=response,
+                    log_type="respond",
                 )
 
             log.info(
@@ -1259,8 +1305,50 @@ class CommanderBridgeBot(discord.Client):
                     is_relay=False,
                 )
 
+            # ログ記録
+            if self._discord_logger:
+                await self._discord_logger.log_conversation(
+                    dept_id=dept_id,
+                    channel=channel_name,
+                    sender="(自発活動)",
+                    message="",
+                    response=text,
+                    log_type="autonomous",
+                )
+
         except discord.HTTPException as exc:
             log.error("自発活動投稿エラー (%s): %s", dept_id, exc)
+
+    async def _post_daily_report(
+        self, text: str, title: str, is_phil: bool,
+    ) -> None:
+        """日報チャンネルへの投稿コールバック。"""
+        if not self._guild:
+            return
+
+        channel_id = CHANNELS.get("📝日報")
+        if not channel_id:
+            return
+        channel = self._guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        color = 0x58A6FF if is_phil else 0xD4AF37  # フィル=青, どら=金
+        author_name = "フィル（司令塔）" if is_phil else "どらどら"
+
+        embed = discord.Embed(
+            title=title,
+            description=text,
+            color=color,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_author(name=f"{author_name} (日報)")
+        embed.set_footer(text="ミスターDオフィス 日報")
+
+        try:
+            await channel.send(embed=embed)
+        except discord.HTTPException as exc:
+            log.error("日報投稿エラー: %s", exc)
 
     async def _post_meeting_message(
         self, text: str, dept_id: str, embed_title: str | None,
@@ -1643,7 +1731,7 @@ class CommanderBridgeBot(discord.Client):
         embed = discord.Embed(
             title="🏢 ミスターDオフィス — 組織図",
             description=(
-                "**指揮系統**: えむ → フィル（司令塔）→ 伝書鳩 → 各部門\n\n"
+                "**指揮系統**: どら → フィル（司令塔）→ 伝書鳩 → 各部門\n\n"
                 "**【本部】** 司令塔 / 会議室\n"
                 "**【事業】** コンテンツ / デザイン / ライティング / リサーチ / 営業 / 広告\n"
                 "**【特殊】** 新規事業 / AI投資 / フィルコンサル / 不動産\n"
@@ -2181,7 +2269,7 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
 
     @tree.command(
         name="relay_panel",
-        description="14部門中継パネルを表示する（えむ専用）",
+        description="14部門中継パネルを表示する（どら専用）",
         guild=guild_obj,
     )
     async def slash_relay_panel(interaction: discord.Interaction) -> None:
@@ -2195,7 +2283,7 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             color=0xD4AF37,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_footer(text="ミスターDオフィス × 伝書鳩 | えむ専用指示ツール")
+        embed.set_footer(text="ミスターDオフィス × 伝書鳩 | どら専用指示ツール")
 
         # 永続 View を使用 (timeout=None)
         view = RelayPanelView()
@@ -2263,6 +2351,186 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         )
 
     @tree.command(
+        name="nippo",
+        description="どらの日報を投稿する",
+        guild=guild_obj,
+    )
+    @app_commands.describe(text="今日やったこと・決めたこと・明日やること")
+    async def slash_nippo(
+        interaction: discord.Interaction,
+        text: str,
+    ) -> None:
+        if not hasattr(bot, '_daily_report') or not bot._daily_report:
+            await interaction.response.send_message(
+                "日報機能が初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "📝 どらの日報を投稿します...",
+            ephemeral=True,
+        )
+        await bot._daily_report.post_dora_report(text)
+        await interaction.followup.send(
+            "✅ 日報を投稿しました。📝日報チャンネルを確認してください。",
+            ephemeral=True,
+        )
+
+    @tree.command(
+        name="phil_nippo",
+        description="フィルの日報を今すぐ生成する（手動トリガー）",
+        guild=guild_obj,
+    )
+    async def slash_phil_nippo(interaction: discord.Interaction) -> None:
+        if not hasattr(bot, '_daily_report') or not bot._daily_report:
+            await interaction.response.send_message(
+                "日報機能が初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "📝 フィルの日報を生成中...",
+        )
+        result = await bot._daily_report.generate_phil_report()
+        if not result:
+            await interaction.followup.send("日報生成に失敗しました。")
+
+    # ------------------------------------------------------------------
+    # ログ閲覧コマンド (Phase 1: P-11, P-12)
+    # ------------------------------------------------------------------
+    @tree.command(
+        name="dept_log",
+        description="部門の活動ログを表示する",
+        guild=guild_obj,
+    )
+    @app_commands.describe(dept="部門名（例: デザイン部）", count="表示件数（デフォルト10）")
+    async def slash_dept_log(
+        interaction: discord.Interaction,
+        dept: str | None = None,
+        count: int = 10,
+    ) -> None:
+        if not hasattr(bot, '_discord_logger') or not bot._discord_logger:
+            await interaction.response.send_message(
+                "ログ機能が初期化されていません。", ephemeral=True,
+            )
+            return
+
+        # 部門IDの特定（チャンネル名 or 部門名から）
+        dept_id = None
+        if dept:
+            # チャンネル名→部門IDの逆引き
+            for d, ch in RELAY_DEPT_TO_CHANNEL.items():
+                if dept in ch or (AI_DEPT_PROMPTS and dept in AI_DEPT_PROMPTS.get(d, {}).get("name", "")):
+                    dept_id = d
+                    break
+        if not dept_id:
+            # 現在のチャンネルから推定
+            ch_id = interaction.channel_id
+            dept_id = CHANNEL_TO_DEPT.get(ch_id)
+
+        if not dept_id:
+            await interaction.response.send_message(
+                "部門を特定できません。部門名を指定するか、部門チャンネルで実行してください。",
+                ephemeral=True,
+            )
+            return
+
+        logs = await bot._discord_logger.get_dept_log(dept_id, limit=count)
+        if not logs:
+            await interaction.response.send_message(
+                f"部門 {dept_id} の活動ログはまだありません。", ephemeral=True,
+            )
+            return
+
+        # サマリー取得
+        summary = await bot._discord_logger.get_today_summary(dept_id)
+
+        lines = [f"**本日のサマリー**: {summary}", ""]
+        for entry in logs[-count:]:
+            ts = entry.get("timestamp", "??:??")
+            log_type = entry.get("type", "?")
+            sender = entry.get("sender", "")
+            msg = entry.get("message", "")[:50]
+            resp = entry.get("response", "")[:50]
+
+            type_label = {"respond": "返答", "autonomous": "自発", "meeting": "会議", "instruction": "指示"}.get(log_type, log_type)
+
+            if log_type == "autonomous":
+                lines.append(f"`{ts}` ({type_label}) {resp}")
+            else:
+                lines.append(f"`{ts}` ({type_label}) {sender}: {msg}")
+                if resp:
+                    lines.append(f"  → {resp}")
+
+        embed = discord.Embed(
+            title=f"活動ログ: {dept_id}",
+            description="\n".join(lines)[:4000],
+            color=0x58A6FF,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text="ミスターDオフィス ログ")
+        await interaction.response.send_message(embed=embed)
+
+    @tree.command(
+        name="instruction_log",
+        description="指示トラッキングログを表示する",
+        guild=guild_obj,
+    )
+    @app_commands.describe(count="表示件数（デフォルト10）")
+    async def slash_instruction_log(
+        interaction: discord.Interaction,
+        count: int = 10,
+    ) -> None:
+        if not hasattr(bot, '_discord_logger') or not bot._discord_logger:
+            await interaction.response.send_message(
+                "ログ機能が初期化されていません。", ephemeral=True,
+            )
+            return
+
+        instructions = await bot._discord_logger.get_instruction_log(limit=count)
+        if not instructions:
+            await interaction.response.send_message(
+                "指示ログはまだありません。", ephemeral=True,
+            )
+            return
+
+        lines = []
+        for inst in instructions:
+            inst_id = inst.get("id", "?")
+            ts = inst.get("timestamp", "??:??")
+            dept = inst.get("dept_id", "?")
+            instruction = inst.get("instruction", "")[:60]
+            status = inst.get("status", "?")
+
+            status_emoji = {
+                "queued": "⏳",
+                "executing": "🔄",
+                "completed": "✅",
+                "failed": "❌",
+                "cancelled": "🚫",
+            }.get(status, "❓")
+
+            lines.append(f"{status_emoji} `[{inst_id}]` {ts} → {dept}")
+            lines.append(f"  {instruction}")
+            if inst.get("result"):
+                lines.append(f"  結果: {inst['result'][:50]}")
+            lines.append("")
+
+        embed = discord.Embed(
+            title="指示トラッキング",
+            description="\n".join(lines)[:4000],
+            color=0xD4AF37,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text="ミスターDオフィス 指示追跡")
+        await interaction.response.send_message(embed=embed)
+
+    # ------------------------------------------------------------------
+    # ステータスコマンド
+    # ------------------------------------------------------------------
+    @tree.command(
         name="brain_status",
         description="部門AI頭脳のステータスを確認する",
         guild=guild_obj,
@@ -2308,6 +2576,329 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         )
         embed.set_footer(text="ミスターDオフィス × 自律オフィス")
         await interaction.response.send_message(embed=embed)
+
+    # ===================================================================
+    # Phase 2: 指示実行コマンド
+    # ===================================================================
+
+    @tree.command(
+        name="run",
+        description="部門AIにタスクを実行させる（Claude Codeが実際に動く）",
+        guild=guild_obj,
+    )
+    @app_commands.describe(
+        dept="部門を選択 (research/design/content/writing 等)",
+        task="やらせたいこと（例: DeFi最新動向を調査してレポートにまとめて）",
+    )
+    async def slash_run(
+        interaction: discord.Interaction,
+        dept: str,
+        task: str,
+    ) -> None:
+        engine = bot._instruction_engine
+        if engine is None:
+            await interaction.response.send_message(
+                "指示実行エンジンが初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        dept_clean = dept.strip().lower()
+        char = CHAR_BY_DEPT.get(dept_clean)
+        if char is None:
+            dept_list = ", ".join(CHAR_BY_DEPT.keys())
+            await interaction.response.send_message(
+                f"部門 `{dept_clean}` は見つかりません。\n有効な部門: {dept_list}",
+                ephemeral=True,
+            )
+            return
+
+        # 安全性チェック
+        classification = engine.classify(task)
+
+        if classification == "forbidden":
+            await interaction.response.send_message(
+                f"その操作は安全上の理由で禁止されています。\n"
+                f"**指示**: {task[:100]}",
+                ephemeral=True,
+            )
+            return
+
+        if classification == "approval_required":
+            # 承認待ちキューに入れる
+            inst_id = engine.queue_for_approval(
+                dept_clean, task, interaction.user.display_name,
+            )
+            embed = discord.Embed(
+                title="承認待ち",
+                description=(
+                    f"**部門**: {char['display_name']}\n"
+                    f"**指示**: {task[:200]}\n"
+                    f"**ID**: `{inst_id}`\n\n"
+                    f"どらが `/approve {inst_id}` で承認すると実行されます。"
+                ),
+                color=0xF39C12,
+            )
+            embed.set_footer(text="Phase 2 指示実行エンジン")
+            await interaction.response.send_message(embed=embed)
+
+            # 司令塔ログにも通知
+            cmd_log_ch = discord.utils.get(
+                bot._guild.text_channels if bot._guild else [],
+                name="司令塔ログ",
+            )
+            if cmd_log_ch:
+                await cmd_log_ch.send(
+                    f"承認待ちタスク: `{inst_id}` "
+                    f"({char['display_name']})\n指示: {task[:100]}"
+                )
+            return
+
+        # safe — 自動実行
+        await interaction.response.defer(thinking=True)
+
+        jst = timezone(timedelta(hours=9))
+        now = datetime.now(jst)
+        inst_id = f"INST-{now.strftime('%m%d%H%M')}"
+
+        # 受付メッセージ
+        await interaction.followup.send(
+            f"実行開始: `{inst_id}` ({char['display_name']})\n"
+            f"**タスク**: {task[:100]}\n"
+            f"完了したらここに報告します。",
+        )
+
+        # バックグラウンドで実行
+        asyncio.create_task(
+            _run_and_report(bot, engine, dept_clean, task, inst_id, interaction.channel),
+            name=f"run_{inst_id}",
+        )
+
+    @tree.command(
+        name="approve",
+        description="承認待ちタスクを承認して実行する（どら専用）",
+        guild=guild_obj,
+    )
+    @app_commands.describe(
+        inst_id="承認する指示ID (例: INST-04231200-001)",
+    )
+    async def slash_approve(
+        interaction: discord.Interaction,
+        inst_id: str,
+    ) -> None:
+        engine = bot._instruction_engine
+        if engine is None:
+            await interaction.response.send_message(
+                "指示実行エンジンが初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        inst = engine.get_queued(inst_id)
+        if inst is None:
+            # 承認待ち一覧を表示
+            pending = engine.get_all_pending()
+            if not pending:
+                await interaction.response.send_message(
+                    "承認待ちのタスクはありません。",
+                    ephemeral=True,
+                )
+            else:
+                lines = []
+                for pid, pdata in pending:
+                    lines.append(
+                        f"`{pid}` — {pdata['dept_id']}: {pdata['task'][:60]}"
+                    )
+                await interaction.response.send_message(
+                    f"`{inst_id}` が見つかりません。\n\n"
+                    f"**承認待ち一覧:**\n" + "\n".join(lines),
+                    ephemeral=True,
+                )
+            return
+
+        if inst["status"] != "pending":
+            await interaction.response.send_message(
+                f"`{inst_id}` は既に処理済みです (status: {inst['status']})",
+                ephemeral=True,
+            )
+            return
+
+        # 承認して実行
+        engine.mark_approved(inst_id)
+        dept_clean = inst["dept_id"]
+        task = inst["task"]
+        char = CHAR_BY_DEPT.get(dept_clean, {"display_name": dept_clean})
+
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(
+            f"承認完了。`{inst_id}` を実行します。\n"
+            f"**部門**: {char.get('display_name', dept_clean)}\n"
+            f"**タスク**: {task[:100]}",
+        )
+
+        asyncio.create_task(
+            _run_and_report(bot, engine, dept_clean, task, inst_id, interaction.channel),
+            name=f"approve_{inst_id}",
+        )
+
+    @tree.command(
+        name="pending",
+        description="承認待ちタスクの一覧を表示",
+        guild=guild_obj,
+    )
+    async def slash_pending(interaction: discord.Interaction) -> None:
+        engine = bot._instruction_engine
+        if engine is None:
+            await interaction.response.send_message(
+                "指示実行エンジンが初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        pending = engine.get_all_pending()
+        if not pending:
+            await interaction.response.send_message(
+                "承認待ちのタスクはありません。",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="承認待ちタスク一覧",
+            color=0xF39C12,
+        )
+        for pid, pdata in pending:
+            char = CHAR_BY_DEPT.get(pdata["dept_id"], {})
+            embed.add_field(
+                name=f"`{pid}` — {char.get('display_name', pdata['dept_id'])}",
+                value=f"{pdata['task'][:100]}\n要求者: {pdata['requester']}",
+                inline=False,
+            )
+        embed.set_footer(text="`/approve INST-ID` で承認・実行")
+        await interaction.response.send_message(embed=embed)
+
+    @tree.command(
+        name="engine_status",
+        description="指示実行エンジンのステータスを表示",
+        guild=guild_obj,
+    )
+    async def slash_engine_status(interaction: discord.Interaction) -> None:
+        engine = bot._instruction_engine
+        if engine is None:
+            await interaction.response.send_message(
+                "指示実行エンジンが初期化されていません。",
+                ephemeral=True,
+            )
+            return
+
+        status = engine.get_status()
+        embed = discord.Embed(
+            title="Phase 2 指示実行エンジン",
+            color=0x3498DB,
+        )
+        embed.add_field(
+            name="月間コスト",
+            value=f"${status['monthly_cost']:.2f} / ${status['monthly_cap']:.2f}",
+            inline=True,
+        )
+        embed.add_field(
+            name="実行回数",
+            value=str(status['execution_count']),
+            inline=True,
+        )
+        embed.add_field(
+            name="承認待ち",
+            value=str(status['pending_approvals']),
+            inline=True,
+        )
+        embed.set_footer(text="ミスターDオフィス × Phase 2")
+        await interaction.response.send_message(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: バックグラウンド実行ヘルパー
+# ---------------------------------------------------------------------------
+
+async def _run_and_report(
+    bot: CommanderBridgeBot,
+    engine: "InstructionEngine",
+    dept_id: str,
+    task: str,
+    inst_id: str,
+    channel: discord.TextChannel | discord.abc.Messageable,
+) -> None:
+    """バックグラウンドでclaude -pを実行し、結果をDiscordに投稿する。"""
+    try:
+        result = await engine.execute(task, dept_id)
+
+        # 完了マーク
+        engine.mark_completed(inst_id, result)
+
+        char = CHAR_BY_DEPT.get(dept_id, {})
+        char_name = char.get("display_name", dept_id)
+
+        if result["status"] == "success":
+            # 成功
+            result_text = result.get("result", "")
+            if len(result_text) > 1800:
+                result_text = result_text[:1800] + "\n... (省略)"
+
+            embed = discord.Embed(
+                title=f"実行完了: {inst_id}",
+                description=result_text or "(結果なし)",
+                color=0x2ECC71,
+            )
+            embed.add_field(
+                name="部門", value=char_name, inline=True,
+            )
+            embed.add_field(
+                name="コスト", value=f"${result.get('cost', 0):.4f}", inline=True,
+            )
+            embed.add_field(
+                name="所要時間",
+                value=f"{result.get('duration_sec', 0):.1f}秒",
+                inline=True,
+            )
+        else:
+            # 失敗 / タイムアウト
+            embed = discord.Embed(
+                title=f"実行失敗: {inst_id}",
+                description=(
+                    f"**ステータス**: {result['status']}\n"
+                    f"**エラー**: {result.get('error', '不明')}\n"
+                    f"**部門**: {char_name}"
+                ),
+                color=0xE74C3C,
+            )
+
+        embed.set_footer(text="Phase 2 指示実行エンジン")
+        await channel.send(embed=embed)
+
+        # 司令塔ログにも記録
+        if bot._guild:
+            cmd_log_ch = discord.utils.get(
+                bot._guild.text_channels, name="司令塔ログ",
+            )
+            if cmd_log_ch and cmd_log_ch != channel:
+                status_icon = {
+                    "success": "done",
+                    "error": "NG",
+                    "timeout": "TIMEOUT",
+                    "budget_exceeded": "BUDGET OVER",
+                }.get(result["status"], result["status"])
+                await cmd_log_ch.send(
+                    f"`{inst_id}` [{status_icon}] {char_name}: {task[:60]} "
+                    f"(${result.get('cost', 0):.4f}, {result.get('duration_sec', 0):.1f}s)"
+                )
+
+    except Exception as exc:
+        log.exception("_run_and_report エラー: %s", exc)
+        try:
+            await channel.send(
+                f"`{inst_id}` 実行中にエラーが発生しました: {exc}"
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

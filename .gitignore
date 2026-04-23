@@ -105,3 +105,4 @@ space_station_concept*.html
 
 # --- Paid/Licensed Assets ---
 frontend/public/sprites/paid/
+scripts/discord_active_session.py

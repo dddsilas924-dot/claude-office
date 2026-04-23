@@ -222,7 +222,8 @@ class DeptBrain:
 
         # shared_state から実データを取得して返答にも反映
         dept_state = self._load_dept_state(dept_id)
-        system_prompt = build_system_prompt(dept_id, dept_state)
+        org_summary = self.load_all_depts_summary()
+        system_prompt = build_system_prompt(dept_id, dept_state, org_summary)
 
         # コンテキスト+新メッセージを組み立て
         messages = []
@@ -283,43 +284,68 @@ class DeptBrain:
             await self._save_dept_activity(dept_id, "autonomous", result)
         return result
 
-    def _load_dept_state(self, dept_id: str) -> dict[str, Any] | None:
-        """shared_state.json から該当部門の実データを読み込む。"""
-        # 環境変数を最優先
+    _DEPT_MAP = {
+        "commander": "commander",
+        "research": "research",
+        "sales": "sales",
+        "design": "design",
+        "content": "content",
+        "writing": "writing",
+        "advertising": "advertising",
+        "ai_investment": "ai_investment",
+        "new_biz": "new_biz",
+        "phil_consulting": "phil_consulting",
+        "security": "security",
+        "takumi_x": "takumi_x",
+        "real_estate": "real_estate",
+        "doradora_sns": "doradora_sns",
+        "origin_story": "origin_story",
+    }
+
+    def _get_state_path(self) -> Path | None:
+        """shared_state.json のパスを返す。"""
         env_path = os.environ.get("SHARED_STATE_PATH", "")
         if env_path:
-            state_path = Path(env_path)
+            p = Path(env_path)
         else:
-            state_path = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
-        if not state_path.is_file():
-            log.debug("shared_state.json が見つかりません: %s", state_path)
+            p = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+        return p if p.is_file() else None
+
+    def _load_full_state(self) -> dict[str, Any] | None:
+        """shared_state.json 全体を読み込む。"""
+        state_path = self._get_state_path()
+        if not state_path:
             return None
         try:
             with state_path.open(encoding="utf-8") as f:
-                data = json.load(f)
-            # dept_id のマッピング (Discord部門ID → shared_state のキー)
-            dept_map = {
-                "commander": "commander",
-                "research": "research",
-                "sales": "sales",
-                "design": "design",
-                "content": "content",
-                "writing": "writing",
-                "advertising": "advertising",
-                "ai_investment": "ai_investment",
-                "new_biz": "new_biz",
-                "phil_consulting": "phil_consulting",
-                "security": "security",
-                "takumi_x": "takumi_x",
-                "real_estate": "real_estate",
-                "doradora_sns": "doradora_sns",
-                "origin_story": "origin_story",
-            }
-            key = dept_map.get(dept_id, dept_id)
-            return data.get("departments", {}).get(key)
+                return json.load(f)
         except (json.JSONDecodeError, OSError) as exc:
             log.debug("shared_state.json読み込みエラー: %s", exc)
             return None
+
+    def _load_dept_state(self, dept_id: str) -> dict[str, Any] | None:
+        """shared_state.json から該当部門の実データを読み込む。"""
+        data = self._load_full_state()
+        if not data:
+            return None
+        key = self._DEPT_MAP.get(dept_id, dept_id)
+        return data.get("departments", {}).get(key)
+
+    def load_all_depts_summary(self) -> str:
+        """全部門の状況サマリーを1つの文字列にまとめて返す。"""
+        data = self._load_full_state()
+        if not data:
+            return ""
+        depts = data.get("departments", {})
+        lines = []
+        for dept_id, dept_data in sorted(depts.items()):
+            if not isinstance(dept_data, dict):
+                continue
+            name = dept_data.get("name", dept_id)
+            status = dept_data.get("status", "不明")
+            updated = dept_data.get("updated_at", "不明")
+            lines.append(f"- {name}: {status} (更新: {updated})")
+        return "\n".join(lines)
 
     async def _save_dept_activity(
         self,
@@ -449,9 +475,10 @@ class DeptBrain:
         Returns:
             発言テキスト。
         """
-        # 会議発言にも実データを注入
+        # 会議発言にも実データと全部門状況を注入
         dept_state = self._load_dept_state(current_dept)
-        system_prompt = build_meeting_prompt(current_dept, topic, round_num, history, dept_state)
+        org_summary = self.load_all_depts_summary()
+        system_prompt = build_meeting_prompt(current_dept, topic, round_num, history, dept_state, org_summary)
         messages = [{"role": "user", "content": f"会議議題「{topic}」について発言してください。"}]
 
         result = await self._call_api(system_prompt, messages, current_dept, "meeting")
@@ -464,8 +491,9 @@ class DeptBrain:
         topic: str,
         history: list[dict[str, str]],
     ) -> str | None:
-        """会議のまとめをフィルとして生成する。"""
-        system_prompt = build_meeting_summary_prompt(topic, history)
+        """会議のまとめをフィルとして生成する。全部門状況も参照する。"""
+        org_summary = self.load_all_depts_summary()
+        system_prompt = build_meeting_summary_prompt(topic, history, org_summary)
         messages = [{"role": "user", "content": "会議をまとめてください。"}]
 
         result = await self._call_api(

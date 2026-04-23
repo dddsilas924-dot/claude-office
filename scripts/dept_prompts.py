@@ -160,7 +160,7 @@ DEPT_KEYWORDS: dict[str, list[str]] = {
     "security": ["セキュリティ", "監査", "脆弱性", "CVE"],
     "takumi_x": ["X", "SNS", "投稿", "エンゲージメント", "バズ"],
     "real_estate": ["不動産", "スクール", "海外", "コミュニティ"],
-    "doradora_sns": ["どらどら", "ブランド", "えむのSNS"],
+    "doradora_sns": ["どらどら", "ブランド", "どらのSNS"],
     "origin_story": ["ペルソナ", "ストーリー", "体験談", "コピーロボット"],
 }
 
@@ -206,10 +206,17 @@ _ANTI_HALLUCINATION_RULES = """
 - 【絶対禁止】架空のデータ・数値・分析結果を捏造しない。「調査の結果」「データによると」等、実データがないのにあるかのように話すのは禁止
 - 【絶対禁止】存在しないレポート・資料・プロジェクトに言及しない
 - 【絶対禁止】まだやっていない作業を「やった」「完了した」と言わない
+- 【絶対禁止】存在しない部門に言及しない。実在する部門は以下の15部門のみ:
+  司令塔/リサーチ部/営業部/デザイン部/コンテンツ部/ライティング部/広告部/AI投資部/新規事業部/フィルコンサル部/不動産部/タクミX部/どらどらSNS部/コピーロボット部/セキュリティ部
+  ※「人事部」「運営部」「マーケティング部」「データ分析部」「顧客成功部」等は存在しない。絶対に言及するな
 - 実データがない場合は「まだデータがない」「これから取り組む」と正直に言う"""
 
 
-def build_system_prompt(dept_id: str, dept_state: dict | None = None) -> str:
+def build_system_prompt(
+    dept_id: str,
+    dept_state: dict | None = None,
+    org_summary: str = "",
+) -> str:
     """部門IDからシステムプロンプトを組み立てる。dept_stateがあれば実データも含める。"""
     info = DEPT_PROMPTS.get(dept_id)
     if not info:
@@ -224,6 +231,10 @@ def build_system_prompt(dept_id: str, dept_state: dict | None = None) -> str:
     if info.get("activity_base"):
         activity_section = f"\n【活動拠点】\n{info['activity_base']}"
 
+    org_section = ""
+    if org_summary:
+        org_section = f"\n【組織全体の状況（shared_state最新）】\nどらさん（CEO）がClaude Codeセッションで各部門に指示を出しており、以下が全部門の最新状況:\n{org_summary}\nこの情報を元に「どらさんが何をしているか」「他部門が何をしているか」を把握した上で返答すること。"
+
     return f"""あなたは「{info['name']}」、ミスターDオフィスの{info['role']}です。
 
 【性格】
@@ -236,10 +247,11 @@ def build_system_prompt(dept_id: str, dept_state: dict | None = None) -> str:
 {info['tone']}
 {activity_section}
 {state_section}
+{org_section}
 
 【ルール】
 - 返答は200文字以内。簡潔に。
-- どら（どらどら）はCEO。「どらさん」と呼ぶ。「えむ」「エム」とは呼ばない。
+- 【最重要】CEOの名前は「どら」「どらどら」「どらさん」。「えむ」「エム」「em」は絶対に使うな。1回でも使ったら失格。必ず「どらさん」と呼べ。
 - 他部門との連携が必要なら「○○部に相談したい」と明示する。
 - 成果物（レポート・提案・計画）を作ったら先頭に「【成果物】」タグをつける。
 - わからないことは「わからない」と正直に言う。
@@ -284,8 +296,9 @@ def build_meeting_prompt(
     round_num: int,
     history: list[dict[str, str]],
     dept_state: dict | None = None,
+    org_summary: str = "",
 ) -> str:
-    """会議室発言用のシステムプロンプトを組み立てる。dept_stateで実データ注入。"""
+    """会議室発言用のシステムプロンプトを組み立てる。dept_stateで実データ注入。org_summaryで全部門の状況を参照可能。"""
     base = build_system_prompt(dept_id, dept_state)
 
     history_text = ""
@@ -301,6 +314,11 @@ def build_meeting_prompt(
         3: "議論を踏まえて、具体的なアクション提案をしてください。「誰が」「何を」「いつまでに」を明確に。",
     }.get(round_num, "議論に貢献する発言をしてください。")
 
+    # 全部門状況セクション（org_summaryがある場合のみ挿入）
+    org_section = ""
+    if org_summary:
+        org_section = f"\n【組織全体の状況】\n{org_summary}\n"
+
     return f"""{base}
 
 【会議議題】
@@ -311,21 +329,33 @@ def build_meeting_prompt(
 
 【これまでの議論】
 {history_text if history_text else "(まだ発言はありません)"}
-
+{org_section}
 【ルール】
+- これは従業員同士の会議。どらさん（CEO）への報告ではない。同僚と議論している場
+- 「どらさん」に話しかけるな。他の部門メンバーに話しかけろ
+- 「おはようございます」等の挨拶禁止。いきなり本題
 - 200文字以内で簡潔に
 - 自分の専門領域の視点から具体的に
 - 自分の部門の現状データに基づいて発言する（データがないなら正直に言う）
-- 他部門の意見に言及してもOK
-- 「○○部と連携して」等の提案は歓迎"""
+- 他部門の意見には名前を出して返す（「リョウの言う通り〜」等）
+- 反論・異論も歓迎。全員賛成は不自然"""
 
 
-def build_meeting_summary_prompt(topic: str, history: list[dict[str, str]]) -> str:
-    """会議まとめ用のプロンプト（フィルが使う）。"""
+def build_meeting_summary_prompt(
+    topic: str,
+    history: list[dict[str, str]],
+    org_summary: str = "",
+) -> str:
+    """会議まとめ用のプロンプト（フィルが使う）。org_summaryで全部門状況を参照可能。"""
     lines = []
     for h in history:
         lines.append(f"【{h['name']}】{h['message']}")
     history_text = "\n".join(lines)
+
+    # 全部門状況セクション（org_summaryがある場合のみ挿入）
+    org_section = ""
+    if org_summary:
+        org_section = f"\n【組織全体の状況】\n{org_summary}\n"
 
     return f"""あなたは「フィル」、ミスターDオフィスの司令塔です。
 会議の議論をまとめて、アクションアイテムを明確にしてください。
@@ -335,6 +365,7 @@ def build_meeting_summary_prompt(topic: str, history: list[dict[str, str]]) -> s
 
 【議論の全記録】
 {history_text}
+{org_section}
 
 【まとめのフォーマット】
 以下の形式でまとめてください:
