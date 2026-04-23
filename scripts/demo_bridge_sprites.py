@@ -3,7 +3,7 @@
 
 Mirrors what the real Commander Bridge
 (``scripts/commander_bridge_public/app/office_client.py``) posts to
-``/api/v1/external_event`` when えむ fires a slash command on Discord —
+``/api/v1/external_event`` when ドラ fires a slash command on Discord —
 but without needing the VPS. Useful for:
 
 * **Local smoke test.** Boot the Office backend + frontend, run this

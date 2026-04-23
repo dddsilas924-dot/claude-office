@@ -2,21 +2,21 @@
 """
 伝書鳩 — Discord Bot
 ====================
-常駐型 Discord Bot。えむが寝ている間も Empire Monitor の各部門キャラを
+常駐型 Discord Bot。ドラが寝ている間も Empire Monitor の各部門キャラを
 Canvas 上に生き続けさせ、Discord チャンネルのメッセージを Canvas へ転送する。
 
 アーキテクチャルール:
-- Discord = 部門が自律的に動く場。えむは審査員
+- Discord = 部門が自律的に動く場。ドラは審査員
 - Office (Canvas) = 視覚的に見える場
-- Claude Code = えむが直接指示する場（別世界線）
+- Claude Code = ドラが直接指示する場（別世界線）
 
 指揮系統:
-- 基本: えむ → フィル（司令塔）→ 伝書鳩 → 各部門
+- 基本: ドラ → フィル（司令塔）→ 伝書鳩 → 各部門
 - 例外: 外部イレギュラーは直接部門に届く
-- 14部門パネル: えむ（どらどら）専用の指示ツール
+- 14部門パネル: ドラ専用の指示ツール
 
 成果物:
-- えむ指示の成果物 → 📦ドラの成果物
+- ドラ指示の成果物 → 📦ドラの成果物
 - 部門自律の成果物 → 📦部門の成果物
 
 セッション連携:
@@ -1359,7 +1359,7 @@ class CommanderBridgeBot(discord.Client):
             # 設計方針: Discordは「ホワイトボード（アイデアの場）」。
             # AI生成テキストにはハルシネーションが含まれる可能性がある。
             # Claude Code側のmemoryに自動保存すると嘘が「事実」として記録される。
-            # えむが「これ採用」と判断したものだけClaude Codeセッションで手動記録する。
+            # ドラが「これ採用」と判断したものだけClaude Codeセッションで手動記録する。
             # if self._memory_bridge:
             #     await self._memory_bridge.save_conversation(
             #         dept_id=dept_id,
@@ -1638,7 +1638,7 @@ class CommanderBridgeBot(discord.Client):
         except discord.HTTPException as exc:
             log.error("成果物保管エラー: %s", exc)
 
-        # クロスポスト: 成果物を関連部門に共有 (is_relay=True の場合はえむ直接指示なので除外)
+        # クロスポスト: 成果物を関連部門に共有 (is_relay=True の場合はドラ直接指示なので除外)
         if not is_relay and self._guild is not None:
             src_ch_name = (
                 source_message.channel.name
@@ -3001,7 +3001,8 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
             return
         dept_clean = dept.strip().lower()
-        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+        _sp = os.environ.get("SHARED_STATE_PATH", "")
+        lock_file = Path(_sp) if _sp else Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
 
         if not lock_file.is_file():
             await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
@@ -3047,7 +3048,10 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             embed.set_footer(text="P-15 dept_lock連携")
             await interaction.response.send_message(embed=embed)
         except Exception as exc:
-            await interaction.response.send_message(f"ロックエラー: {exc}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"ロックエラー: {exc}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"ロックエラー: {exc}", ephemeral=True)
 
     @tree.command(name="unlock", description="部門のロックを解除する")
     @app_commands.describe(dept="部門ID")
@@ -3056,7 +3060,8 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
             return
         dept_clean = dept.strip().lower()
-        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+        _sp = os.environ.get("SHARED_STATE_PATH", "")
+        lock_file = Path(_sp) if _sp else Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
 
         if not lock_file.is_file():
             await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
@@ -3087,11 +3092,15 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             embed.set_footer(text="P-15 dept_lock連携")
             await interaction.response.send_message(embed=embed)
         except Exception as exc:
-            await interaction.response.send_message(f"ロック解除エラー: {exc}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"ロック解除エラー: {exc}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"ロック解除エラー: {exc}", ephemeral=True)
 
     @tree.command(name="locks", description="全部門のロック状況を表示")
     async def slash_locks(interaction: discord.Interaction) -> None:
-        lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
+        _sp = os.environ.get("SHARED_STATE_PATH", "")
+        lock_file = Path(_sp) if _sp else Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
 
         if not lock_file.is_file():
             await interaction.response.send_message("shared_state.json が見つかりません", ephemeral=True)
@@ -3123,7 +3132,10 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
             embed.set_footer(text=f"P-15 dept_lock連携 | {len(locked)}件ロック中")
             await interaction.response.send_message(embed=embed)
         except Exception as exc:
-            await interaction.response.send_message(f"エラー: {exc}", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"エラー: {exc}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"エラー: {exc}", ephemeral=True)
 
     # ===================================================================
     # Phase 3: P-19 ロールバック — /rollback

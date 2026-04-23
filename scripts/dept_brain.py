@@ -197,7 +197,7 @@ class DeptBrain:
 
     使い方:
         brain = DeptBrain(api_key="sk-ant-...")
-        response = await brain.respond("research", "市場調査して", [...], "えむ")
+        response = await brain.respond("research", "市場調査して", [...], "ドラ")
     """
 
     def __init__(self, api_key: str | None = None):
