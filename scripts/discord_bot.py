@@ -150,7 +150,7 @@ if not HMAC_SECRET:
 OFFICE_BASE_URL: str = os.environ.get("OFFICE_BASE_URL", "http://localhost:8000").rstrip("/")
 CANVAS_SESSION_ID: str = os.environ.get("CANVAS_SESSION_ID", "bridge_live")
 HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))  # 秒
-GUILD_ID: int = 1494899621460312145
+GUILD_ID: int = int(os.environ.get("DISCORD_SERVER_ID", os.environ.get("DISCORD_GUILD_ID", "0")))
 JST = timezone(timedelta(hours=9))
 
 # どら（CEO）のDiscord User ID — /run, /approve はこのユーザーのみ実行可能
@@ -2997,6 +2997,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
     @tree.command(name="lock", description="部門をロックする（排他作業開始）")
     @app_commands.describe(dept="部門ID")
     async def slash_lock(interaction: discord.Interaction, dept: str) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         dept_clean = dept.strip().lower()
         lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
 
@@ -3049,6 +3052,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
     @tree.command(name="unlock", description="部門のロックを解除する")
     @app_commands.describe(dept="部門ID")
     async def slash_unlock(interaction: discord.Interaction, dept: str) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         dept_clean = dept.strip().lower()
         lock_file = Path(__file__).parent.parent.parent / "empire_monitor_full_20260321" / ".claude" / "shared_state.json"
 
@@ -3197,6 +3203,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         event: str,
         dept: str = "security",
     ) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         dept_clean = dept.strip().lower()
 
         # 通知先の自動判定
@@ -3370,9 +3379,28 @@ async def _run_and_report(
             found_full_paths = _FILE_PATH_PATTERN.finditer(full_result_text)
             upload_files: list[discord.File] = []
             warned_paths: list[str] = []
+            # セキュリティ: アップロード許可ディレクトリのallowlist
+            _UPLOAD_ALLOWED_PREFIXES = (
+                "/Users/satts924/Downloads/",
+                "/Users/satts924/Desktop/",
+                str(Path.home() / "Desktop") + "/",
+                str(Path.home() / "Downloads") + "/",
+                "/tmp/claude_office",
+            )
             for m in found_full_paths:
-                fpath = Path(m.group(0))
+                fpath = Path(m.group(0)).resolve()
                 if not fpath.is_file():
+                    continue
+                # パストラバーサル防止: allowlist外のファイルはスキップ
+                fpath_str = str(fpath)
+                if not any(fpath_str.startswith(prefix) for prefix in _UPLOAD_ALLOWED_PREFIXES):
+                    log.warning("アップロード拒否（allowlist外）: %s", fpath_str)
+                    warned_paths.append(f"{fpath.name} (許可ディレクトリ外のためスキップ)")
+                    continue
+                # .env等の機密ファイルは絶対にアップロードしない
+                if fpath.name.startswith(".env") or fpath.suffix in (".key", ".pem", ".p12"):
+                    log.warning("アップロード拒否（機密ファイル）: %s", fpath.name)
+                    warned_paths.append(f"{fpath.name} (機密ファイルのためスキップ)")
                     continue
                 size_mb = fpath.stat().st_size / (1024 * 1024)
                 if size_mb >= 25:
