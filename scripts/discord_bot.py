@@ -39,7 +39,7 @@ Canvas 上に生き続けさせ、Discord チャンネルのメッセージを C
 
 必須環境変数 (.env):
     DISCORD_BOT_TOKEN
-    EXTERNAL_EVENT_SECRET=EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ
+    EXTERNAL_EVENT_SECRET=your-secret-here
 
 オプション環境変数:
     OFFICE_BASE_URL=http://localhost:8000  (デフォルト)

@@ -83,9 +83,7 @@ log = logging.getLogger("memory_sync")
 # 定数・設定
 # ---------------------------------------------------------------------------
 JST = timezone(timedelta(hours=9))
-HMAC_SECRET: str = os.environ.get(
-    "EXTERNAL_EVENT_SECRET", "EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ"
-)
+HMAC_SECRET: str = os.environ.get("EXTERNAL_EVENT_SECRET", "")
 OFFICE_BASE_URL: str = os.environ.get("OFFICE_BASE_URL", "http://localhost:8000").rstrip("/")
 CANVAS_SESSION_ID: str = os.environ.get("CANVAS_SESSION_ID", "bridge_sync")
 DEFAULT_INTERVAL: int = 1800  # 30分

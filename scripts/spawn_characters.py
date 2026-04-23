@@ -9,11 +9,12 @@ external_event APIで送信してCanvas上にスプライト表示させる。
 import hashlib
 import hmac
 import json
+import os
 import time
 import urllib.request
 
 API_URL = "http://localhost:8000/api/v1/external_event"
-SECRET = "EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ"
+SECRET = os.environ.get("EXTERNAL_EVENT_SECRET", "")
 
 # 部門キャラ定義（dept_id → CHARACTER_FILES のキーと一致させる）
 CHARACTERS = [
