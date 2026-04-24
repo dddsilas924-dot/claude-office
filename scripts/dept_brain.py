@@ -100,26 +100,30 @@ class RateLimiter:
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
-        """レートリミット内なら即座にreturn、超えていたらwait。"""
-        wait_time = 0.0
-        async with self._lock:
-            now = time.monotonic()
-            # 1分以上前のタイムスタンプを除去
-            self._timestamps = [t for t in self._timestamps if now - t < 60.0]
+        """レートリミット内ならスロットを確保してreturn、超えていたらwait後にリトライ。
 
-            if len(self._timestamps) >= self._max:
-                # 最も古いリクエストから60秒後まで待つ
-                wait_time = 60.0 - (now - self._timestamps[0])
+        修正: 旧実装はチェックとスロット確保が2つのlock区間に分かれていた（TOCTOU）。
+        会議中に15部門が同時にチェックすると全員「空きあり」と判定してバーストした。
+        新実装: 1回のlock取得でチェック+確保をアトミックに行い、待ち時間はlock外でsleep後にリトライ。
+        """
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                # 1分以上前のタイムスタンプを除去
+                self._timestamps = [t for t in self._timestamps if now - t < 60.0]
 
-        # ロック外でsleep（ロック保持中にsleepすると他タスクをブロックする）
-        if wait_time > 0:
+                if len(self._timestamps) < self._max:
+                    # 枠あり → スロット確保して即return（アトミック）
+                    self._timestamps.append(now)
+                    return
+
+                # 枠なし → 待ち時間を計算（lockはここで解放される）
+                wait_time = 60.0 - (now - self._timestamps[0]) + 0.1  # +0.1s マージン
+
+            # ロック外でsleep（他タスクをブロックしない）
             log.info("レートリミット到達。%.1f秒待機...", wait_time)
             await asyncio.sleep(wait_time)
-
-        async with self._lock:
-            now = time.monotonic()
-            self._timestamps = [t for t in self._timestamps if now - t < 60.0]
-            self._timestamps.append(now)
+            # ループ先頭に戻り、再度lockを取ってチェック+確保
 
 
 # ---------------------------------------------------------------------------
@@ -158,8 +162,8 @@ class CostTracker:
                 json.dumps({"month": self._current_month, "cost": self._monthly_cost}),
                 encoding="utf-8",
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            log.error("コスト永続化ファイル書き込み失敗（再起動後にコスト上限を突き破る可能性あり）: %s", exc)
 
     async def add_cost(self, input_tokens: int, output_tokens: int, config: dict) -> None:
         """APIコールのコストを加算する。"""
@@ -258,9 +262,9 @@ class DeptBrain:
         message: str,
         context: list[dict[str, str]],
         sender: str,
-    ) -> str | None:
+    ) -> tuple[str | None, list[tuple[str, bytes]]]:
         """
-        部門AIとしてメッセージに返答する。
+        部門AIとしてメッセージに返答する。ツール使用対応版。
 
         Args:
             dept_id: 部門ID (例: "research")
@@ -269,11 +273,12 @@ class DeptBrain:
             sender: 送信者名
 
         Returns:
-            AI返答テキスト。エラー/上限到達時はNone。
+            (AI返答テキスト or None, [(ファイル名ヒント, 画像バイト), ...])
+            エラー/上限到達時は (None, [])。
         """
         if dept_id not in DEPT_PROMPTS:
             log.warning("未知の部門ID: %s", dept_id)
-            return None
+            return None, []
 
         # shared_state + memory から実データ・ドラの判断を取得して返答に反映
         dept_state = self._load_dept_state(dept_id)
@@ -289,10 +294,19 @@ class DeptBrain:
             "content": f"[{sender}]: {message}",
         })
 
-        result = await self._call_api(system_prompt, messages, dept_id, "respond")
+        # 部門に対応するツール定義を取得
+        try:
+            from discord_tools import get_tools_for_dept  # noqa: PLC0415
+            tools = get_tools_for_dept(dept_id)
+        except ImportError:
+            tools = []
+
+        result, attachments = await self._call_api_with_tools(
+            system_prompt, messages, dept_id, "respond", tools=tools
+        )
         if result:
             await self._save_dept_activity(dept_id, "respond", result)
-        return result
+        return result, attachments
 
     async def generate_autonomous(
         self,
@@ -1094,3 +1108,156 @@ class DeptBrain:
                 return None
 
         return None
+
+    async def _call_api_with_tools(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        dept_id: str,
+        call_type: str,
+        tools: list[dict] | None = None,
+        max_tokens: int | None = None,
+    ) -> tuple[str | None, list[tuple[str, bytes]]]:
+        """
+        ツール使用対応のAPI呼び出し。
+
+        Returns:
+            (テキスト返答 or None, [(ファイル名ヒント, 画像バイト), ...])
+        """
+        # ツールなし or コスト上限 → 既存の _call_api() にフォールバック
+        if not tools:
+            text = await self._call_api(system_prompt, messages, dept_id, call_type, max_tokens)
+            return text, []
+
+        if not await self._cost_tracker.can_proceed():
+            log.warning("月間コスト上限: ツール呼び出しをスキップ")
+            text = await self._call_api(system_prompt, messages, dept_id, call_type, max_tokens)
+            return text, []
+
+        # discord_tools は遅延インポート（ImportError を握る）
+        try:
+            from discord_tools import execute_tool  # noqa: PLC0415
+        except ImportError:
+            log.warning("discord_tools インポート失敗。ツールなしでフォールバック。")
+            text = await self._call_api(system_prompt, messages, dept_id, call_type, max_tokens)
+            return text, []
+
+        tokens = max_tokens or self._config["max_response_tokens"]
+        timeout = self._config.get("api_timeout_sec", 30)
+        current_messages = list(messages)
+        attachments: list[tuple[str, bytes]] = []
+
+        for loop_count in range(3):  # 最大3ループ（無限ループ防止）
+            await self._rate_limiter.acquire()
+
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._client.messages.create,
+                        model=self._config["api_model"],
+                        max_tokens=tokens,
+                        system=system_prompt,
+                        messages=current_messages,
+                        tools=tools,
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                log.warning("_call_api_with_tools タイムアウト (loop %d)", loop_count)
+                break
+            except anthropic.RateLimitError:
+                log.warning("_call_api_with_tools レートリミット。30秒待機")
+                await asyncio.sleep(30)
+                break
+            except Exception as exc:
+                log.exception("_call_api_with_tools APIエラー: %s", exc)
+                break
+
+            # コスト記録
+            try:
+                usage = response.usage
+                await self._cost_tracker.add_cost(
+                    usage.input_tokens, usage.output_tokens, self._config,
+                )
+                log.info(
+                    "DeptBrain(tools) [%s/%s] loop=%d: %d in / %d out",
+                    dept_id, call_type, loop_count,
+                    usage.input_tokens, usage.output_tokens,
+                )
+            except Exception:
+                pass
+
+            # ツール呼び出しがない → 最終テキスト返答
+            if response.stop_reason != "tool_use":
+                text = ""
+                for block in response.content:
+                    if block.type == "text":
+                        text += block.text
+                return text.strip() or None, attachments
+
+            # ツール呼び出しを処理
+            tool_results = []
+            assistant_content = response.content  # type: ignore[assignment]
+
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+
+                tool_name = block.name
+                tool_input = block.input  # dict
+                tool_use_id = block.id
+
+                log.info("ツール呼び出し: %s(%s)", tool_name, list(tool_input.keys()))
+
+                try:
+                    raw_result = await execute_tool(tool_name, tool_input)
+                except Exception as exc:
+                    log.warning("ツール実行エラー (%s): %s", tool_name, exc)
+                    raw_result = f"ツール実行エラー: {exc}"
+
+                # 画像の場合はバイトを取り出してattachmentsに積む
+                if isinstance(raw_result, tuple):
+                    text_result, image_bytes = raw_result
+                    if image_bytes:
+                        filename_hint = f"generated_{tool_use_id[:8]}.png"
+                        attachments.append((filename_hint, image_bytes))
+                    result_content = text_result
+                else:
+                    result_content = str(raw_result)
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_content,
+                })
+
+            # assistant メッセージ + tool_result メッセージを追加して次ループへ
+            current_messages = list(current_messages)
+            current_messages.append({"role": "assistant", "content": assistant_content})
+            current_messages.append({"role": "user", "content": tool_results})
+
+        # ループ上限到達 → ツールなしで最終回答を強制
+        log.info("_call_api_with_tools: ループ上限到達。ツールなしで最終回答を取得。")
+        try:
+            final_response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._client.messages.create,
+                    model=self._config["api_model"],
+                    max_tokens=tokens,
+                    system=system_prompt + "\n\n【重要】これ以上ツールを使わず、今手元にある情報で回答をまとめてください。",
+                    messages=current_messages,
+                    # tools を渡さないことでテキスト応答を強制
+                ),
+                timeout=timeout,
+            )
+            text = ""
+            for block in final_response.content:
+                if block.type == "text":
+                    text += block.text
+            if text.strip():
+                return text.strip(), attachments
+        except Exception as exc:
+            log.warning("_call_api_with_tools 最終回答取得エラー: %s", exc)
+
+        return None, attachments
+

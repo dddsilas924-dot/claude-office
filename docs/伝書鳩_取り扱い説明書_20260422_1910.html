@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>伝書鳩 取り扱い説明書</title>
+<style>
+@font-face {
+    font-family: 'BIZUDPGothic';
+    src: url('file:///Users/satts924/Downloads/empire_monitor_full_20260321/reports/assets/fonts/japanese/BIZUDPGothic-Regular.ttf') format('truetype');
+    font-weight: normal;
+}
+@font-face {
+    font-family: 'BIZUDPGothic';
+    src: url('file:///Users/satts924/Downloads/empire_monitor_full_20260321/reports/assets/fonts/japanese/BIZUDPGothic-Bold.ttf') format('truetype');
+    font-weight: bold;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'BIZUDPGothic', 'Hiragino Kaku Gothic ProN', sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    line-height: 1.8;
+    font-size: 16px;
+    padding: 40px 20px;
+}
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    background: #161b22;
+    border-radius: 12px;
+    padding: 48px 56px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    border: 1px solid #30363d;
+}
+h1 {
+    font-size: 32px;
+    color: #58a6ff;
+    border-bottom: 2px solid #58a6ff;
+    padding-bottom: 16px;
+    margin-bottom: 32px;
+    font-weight: bold;
+}
+h2 {
+    font-size: 24px;
+    color: #79c0ff;
+    margin-top: 48px;
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #30363d;
+}
+h3 {
+    font-size: 18px;
+    color: #d2a8ff;
+    margin-top: 28px;
+    margin-bottom: 12px;
+}
+p { margin-bottom: 16px; }
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    background: #1f2937;
+    color: #7ee787;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 14px;
+}
+pre {
+    background: #1f2937;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px;
+    overflow-x: auto;
+    margin: 16px 0;
+    line-height: 1.5;
+}
+pre code {
+    background: none;
+    padding: 0;
+    font-size: 14px;
+    color: #c9d1d9;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 15px;
+}
+th {
+    background: #21262d;
+    color: #58a6ff;
+    padding: 12px 16px;
+    text-align: left;
+    border: 1px solid #30363d;
+    font-weight: bold;
+}
+td {
+    padding: 10px 16px;
+    border: 1px solid #30363d;
+    vertical-align: top;
+}
+tr:nth-child(even) td { background: #1c2128; }
+tr:hover td { background: #1f2937; }
+hr {
+    border: none;
+    border-top: 1px solid #30363d;
+    margin: 32px 0;
+}
+strong { color: #f0f6fc; }
+blockquote {
+    border-left: 4px solid #58a6ff;
+    padding: 12px 20px;
+    margin: 16px 0;
+    background: #1c2128;
+    border-radius: 0 8px 8px 0;
+}
+ul, ol {
+    margin: 12px 0 12px 24px;
+}
+li { margin-bottom: 6px; }
+.header-meta {
+    color: #8b949e;
+    font-size: 14px;
+    margin-bottom: 32px;
+}
+.footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 13px;
+    text-align: center;
+}
+@media (max-width: 768px) {
+    .container { padding: 24px 20px; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 20px; }
+    table { font-size: 13px; }
+    th, td { padding: 8px 10px; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1 id="_1">伝書鳩 取り扱い説明書</h1>
+<p><strong>対象ファイル</strong>: <code>scripts/discord_bot.py</code><br />
+<strong>サーバー名</strong>: ミスターDオフィス<br />
+<strong>最終更新</strong>: 2026-04-22</p>
+<hr />
+<h2 id="0">0. クイックスタートガイド</h2>
+<p>初めて起動する場合はここから読む。</p>
+<h3 id="_2">必要な環境変数</h3>
+<p><code>.env</code> ファイルに以下を設定する。</p>
+<table>
+<thead>
+<tr>
+<th>変数名</th>
+<th>必須</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANTHROPIC_API_KEY</code></td>
+<td>必須</td>
+<td>Claude API キー（Anthropic Console で発行）</td>
+</tr>
+<tr>
+<td><code>DISCORD_BOT_TOKEN</code></td>
+<td>必須</td>
+<td>Discord Bot 認証トークン（Discord Developer Portal で発行）</td>
+</tr>
+<tr>
+<td><code>DISCORD_APP_ID</code></td>
+<td>必須</td>
+<td>Discord アプリケーション ID（Developer Portal &gt; General Information）</td>
+</tr>
+<tr>
+<td><code>DISCORD_SERVER_ID</code></td>
+<td>必須</td>
+<td>対象 Discord サーバーの ID（サーバーを右クリック &gt; IDをコピー）</td>
+</tr>
+<tr>
+<td><code>SHARED_STATE_PATH</code></td>
+<td>必須</td>
+<td>shared_state.json のフルパス</td>
+</tr>
+<tr>
+<td><code>EXTERNAL_EVENT_SECRET</code></td>
+<td>必須</td>
+<td>Canvas との HMAC 認証シークレット</td>
+</tr>
+</tbody>
+</table>
+<p><code>.env</code> 記載例:</p>
+<pre><code>ANTHROPIC_API_KEY=sk-ant-...
+DISCORD_BOT_TOKEN=MTI...
+DISCORD_APP_ID=1234567890
+DISCORD_SERVER_ID=9876543210
+SHARED_STATE_PATH=/Users/yourname/empire_monitor/shared_state.json
+EXTERNAL_EVENT_SECRET=EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ
+</code></pre>
+<h3 id="_3">起動コマンド</h3>
+<pre><code class="language-bash">python3 scripts/discord_bot.py
+</code></pre>
+<h3 id="_4">起動確認方法</h3>
+<p>起動ログに以下が出力されれば正常:</p>
+<pre><code>[INFO] Discord Bot ログイン完了: 伝書鳩#XXXX
+[INFO] Canvas announce: 15 OK, 0 failed
+[INFO] 完全起動完了
+</code></pre>
+<p>「完全起動完了」が出ない場合は <code>.env</code> の設定値か backend の起動状態を確認する。</p>
+<hr />
+<h2 id="1">1. 概要</h2>
+<p><strong>伝書鳩</strong>は Discord と Office Canvas を繋ぐ常駐型 Bot。えむが寝ている間も部門エージェントを Canvas 上に生き続けさせ、Discord のメッセージを Canvas に自動転送する。</p>
+<h3 id="_5">指揮系統</h3>
+<pre><code>えむ（どらどら）
+  └─ フィル（司令塔チャンネル）
+       └─ 伝書鳩（Bot）
+            └─ 各部門チャンネル → Office Canvas
+</code></pre>
+<ul>
+<li><strong>えむから部門への指示</strong>: 司令塔チャンネルで <code>/relay_panel</code> を使う</li>
+<li><strong>外部イレギュラー</strong>: 直接該当部門チャンネルに届く（Botが自動転送）</li>
+<li><strong>成果物の行き先</strong>: えむ指示のもの → <code>📦ドラの成果物</code> / 部門自律のもの → <code>📦部門の成果物</code></li>
+</ul>
+<h3 id="_6">動作に必要なもの</h3>
+<table>
+<thead>
+<tr>
+<th>要素</th>
+<th>役割</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/discord_bot.py</code></td>
+<td>Bot 本体</td>
+</tr>
+<tr>
+<td>backend (port 8000)</td>
+<td>Canvas API エンドポイント</td>
+</tr>
+<tr>
+<td>frontend (port 3000)</td>
+<td>Canvas 画面（確認用）</td>
+</tr>
+<tr>
+<td><code>.env</code> の <code>DISCORD_BOT_TOKEN</code></td>
+<td>Bot 認証トークン</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2">2. サーバー構成</h2>
+<p>Bot 起動時に以下の構造が自動整理される。カテゴリ・チャンネルが存在しなければ自動作成する。</p>
+<h3 id="_7">🏢 本部</h3>
+<table>
+<thead>
+<tr>
+<th>チャンネル</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>司令塔</td>
+<td>えむ → フィル → 各部門。全体指揮・戦略判断</td>
+</tr>
+<tr>
+<td>司令塔ログ</td>
+<td>Bot 自動ログ・イベント記録</td>
+</tr>
+<tr>
+<td>📊ステータス</td>
+<td>部門稼働状況ダッシュボード（起動時自動更新）</td>
+</tr>
+<tr>
+<td>📝日報</td>
+<td>日次レポート（Phase 2 で shared_state 連携予定）</td>
+</tr>
+<tr>
+<td>会議室</td>
+<td>部門間連携・プロジェクト横断ミーティング</td>
+</tr>
+<tr>
+<td>一般</td>
+<td>雑談・お知らせ（組織図 embed が自動 pin される）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_8">💼 事業部門</h3>
+<p>コンテンツ部 / デザイン部 / ライティング部 / リサーチ部 / 営業部 / 広告部</p>
+<h3 id="_9">🚀 特殊部門</h3>
+<p>新規事業部 / AI投資部 / フィルコンサル部 / 不動産部</p>
+<h3 id="sns">📣 SNS・ブランディング</h3>
+<p>タクミX部 / どらどらSNS部 / コピーロボット部</p>
+<h3 id="_10">🔒 管理</h3>
+<p>セキュリティ部</p>
+<h3 id="_11">📦 保管庫</h3>
+<table>
+<thead>
+<tr>
+<th>チャンネル</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>📦ドラの成果物</td>
+<td>えむが指示して作らせた成果物</td>
+</tr>
+<tr>
+<td>📦部門の成果物</td>
+<td>部門が自律的に作った成果物</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3">3. スラッシュコマンド一覧</h2>
+<h3 id="status"><code>/status</code></h3>
+<p>システムステータスを embed で表示する。Bot の生死確認に使う。</p>
+<p>表示内容: Discord Bot 状態 / Canvas API URL / Session ID / ハートビート間隔 / キャラ数 / 監視チャンネル数</p>
+<h3 id="ask-dept-question"><code>/ask [dept] [question]</code></h3>
+<p>指定部門のエージェントに質問を投げ、Canvas に転送する。</p>
+<pre><code>/ask dept:research question:DeFiの最新動向を調べて
+</code></pre>
+<p><code>dept</code> には部門 ID を英語で入力する（<code>commander</code> / <code>research</code> / <code>sales</code> / <code>design</code> / <code>content</code> / <code>writing</code> / <code>advertising</code> / <code>ai_investment</code> / <code>new_biz</code> / <code>phil_consulting</code> / <code>real_estate</code> / <code>takumi_x</code> / <code>doradora_sns</code> / <code>origin_story</code> / <code>security</code>）。</p>
+<h3 id="bridge-message"><code>/bridge [message]</code></h3>
+<p>メッセージを Canvas ブリッジ経由で司令塔（commander）に配信する。司令塔ログチャンネルにも自動記録される。</p>
+<pre><code>/bridge 今日のタスクを全部門に共有します
+</code></pre>
+<h3 id="relay_panel"><code>/relay_panel</code></h3>
+<p><strong>15部門中継パネル</strong>を表示する（えむ専用の指示ツール）。司令塔チャンネルで使うのが基本。</p>
+<h3 id="silence"><code>/silence</code></h3>
+<p>自発活動スケジューラーを一時停止する。会議や集中作業でチャンネルを静かにしたい場合に使う。停止中は定例会議も行われない。</p>
+<h3 id="resume"><code>/resume</code></h3>
+<p><code>/silence</code> で停止した自発活動を再開する。次の4時間サイクルから自律発言が再開される。</p>
+<h3 id="meeting"><code>/meeting [議題]</code></h3>
+<p>臨時会議を即時開催する。議題を省略した場合は shared_state.json から自動選定される。</p>
+<pre><code>/meeting 不動産部の今月目標について
+</code></pre>
+<h3 id="cost"><code>/cost</code></h3>
+<p>月間 API コストの使用状況を表示する。現在の累積コストと月間上限に対する残量が確認できる。</p>
+<hr />
+<h2 id="4">4. テキストコマンド一覧</h2>
+<p>スラッシュ不要。チャンネルに文字を打つだけで動く。</p>
+<table>
+<thead>
+<tr>
+<th>コマンド</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>テスト</code></td>
+<td>Bot 接続確認。稼働中かどうか確認できる</td>
+</tr>
+<tr>
+<td><code>ステータス</code></td>
+<td>システム状況を表示</td>
+</tr>
+<tr>
+<td><code>ヘルプ</code></td>
+<td>コマンド一覧を表示</td>
+</tr>
+<tr>
+<td><code>部門一覧</code></td>
+<td>Canvas に常駐している全エージェントを一覧表示</td>
+</tr>
+</tbody>
+</table>
+<p>エイリアス: <code>test</code> / <code>ping</code> / <code>status</code> / <code>help</code> / <code>?</code> / <code>departments</code> / <code>dept</code> も動く。</p>
+<hr />
+<h2 id="5-15">5. 15部門中継パネルの使い方（重要）</h2>
+<p>えむが各部門に直接指示を出すためのメインインターフェース。</p>
+<h3 id="_12">手順</h3>
+<p><strong>1. 司令塔チャンネルで <code>/relay_panel</code> と打つ</strong></p>
+<p>embed とボタン群が表示される。</p>
+<p><strong>2. ボタンの色分け</strong></p>
+<table>
+<thead>
+<tr>
+<th>色</th>
+<th>対象部門</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>blurple（紫青）</td>
+<td>司令塔 / セキュリティ部</td>
+</tr>
+<tr>
+<td>green（緑）</td>
+<td>コンテンツ部 / デザイン部 / ライティング部 / リサーチ部 / 営業部 / 広告部</td>
+</tr>
+<tr>
+<td>grey（グレー）</td>
+<td>AI投資部 / 新規事業部 / フィルコンサル部 / 不動産部</td>
+</tr>
+<tr>
+<td>red（赤）</td>
+<td>タクミX部 / どらどらSNS部 / コピーロボット部</td>
+</tr>
+</tbody>
+</table>
+<p><strong>3. 部門ボタンをクリック</strong></p>
+<p>メッセージ入力モーダル（ポップアップ）が開く。</p>
+<p><strong>4. メッセージを書いて送信</strong></p>
+<p>送信後、以下が自動で行われる:<br />
+- 該当部門チャンネルに embed で転送<br />
+- Canvas に HMAC イベントを送信（Canvas 上のキャラに反映）<br />
+- 送信者に「転送完了」の確認メッセージが届く（本人にのみ見える）</p>
+<h3 id="_13">注意点</h3>
+<ul>
+<li><strong>古いパネルのボタンは動かない</strong>。ボタンを押して「インタラクションに失敗しました」と出たら、古いパネルのメッセージを削除して <code>/relay_panel</code> で新しく作り直すこと。</li>
+<li>Bot 再起動後も新しいパネルのボタンは正常に動作する（永続 View 実装済み）。</li>
+</ul>
+<hr />
+<h2 id="6">6. 自動機能</h2>
+<h3 id="_14">メッセージ自動転送</h3>
+<p>部門チャンネルに書き込まれたメッセージは Canvas に自動転送される。Bot 自身のメッセージと他の Bot のメッセージは転送されない。</p>
+<h3 id="_15">添付ファイル対応</h3>
+<table>
+<thead>
+<tr>
+<th>ファイル種別</th>
+<th>Canvas への送信内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>画像（png/jpg/gif/webp）</td>
+<td>ファイル名・URL</td>
+</tr>
+<tr>
+<td>PDF</td>
+<td>ファイル名・サイズ</td>
+</tr>
+<tr>
+<td>テキスト（MD/txt）</td>
+<td>ファイル名・内容（最大 2000 字）</td>
+</tr>
+<tr>
+<td>動画（mp4/mov）</td>
+<td>ファイル名・サイズ・URL</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_16">ハートビート</h3>
+<p>5分ごと（デフォルト）に全キャラを Canvas に再送信して TTL をリセットする。これにより Canvas からキャラが消えなくなる。</p>
+<h3 id="_17">チャンネル・カテゴリ自動作成</h3>
+<p>Bot 起動時に <code>CATEGORY_STRUCTURE</code> の定義に従ってカテゴリとチャンネルを自動整理する。冪等（何度実行しても同じ結果）。</p>
+<h3 id="_18">サーバー名自動設定</h3>
+<p>Bot 起動時にサーバー名を「ミスターDオフィス」に変更する。既に正しい名前なら何もしない。</p>
+<h3 id="_19">自発活動スケジューラー</h3>
+<p>Bot が起動している間、4時間おきに15部門のエージェントが順番に自律発言を行う。人間からの指示がなくても各部門の活動ログが Discord に蓄積される。</p>
+<p>動作の流れ:</p>
+<ol>
+<li>4時間ごとにスケジューラーが起動</li>
+<li>15部門を順番に呼び出し（部門ごとに間隔をあけて送信）</li>
+<li>各部門が担当チャンネルに自律発言を投稿</li>
+<li>発言内容は shared_state.json の状態を参照して生成</li>
+</ol>
+<p><code>/silence</code> で一時停止、<code>/resume</code> で再開できる。</p>
+<h3 id="_20">定例会議</h3>
+<p>毎日 14:00 JST に自動で開催される。会議室チャンネルに議事録が記録される。</p>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>開催時刻</td>
+<td>毎日 14:00 JST</td>
+</tr>
+<tr>
+<td>場所</td>
+<td>会議室チャンネル</td>
+</tr>
+<tr>
+<td>議題</td>
+<td>shared_state.json のステータスと進行中タスクから自動選定</td>
+</tr>
+<tr>
+<td>進行</td>
+<td>3ラウンド形式（課題提起 → 議論 → アクション決定）</td>
+</tr>
+<tr>
+<td>司会</td>
+<td>フィル（commander）が自動担当</td>
+</tr>
+</tbody>
+</table>
+<p><code>/meeting [議題]</code> で任意のタイミングに臨時会議を開催できる。</p>
+<h3 id="shared_statejson">shared_state.json 自動書き戻し</h3>
+<p>Discord での活動（部門発言・会議決定・成果物生成）は自動的に shared_state.json に反映される。他のセッションや Claude Code チャットがshared_stateを読めば、Discord 上で何が行われたかを把握できる。</p>
+<h3 id="_21">成果物自動保管</h3>
+<p>部門が成果物を生成した場合、「📦部門の成果物」チャンネルに Markdown ファイルとして自動保存される。</p>
+<ul>
+<li>えむが指示して生成したもの: 「📦ドラの成果物」チャンネル</li>
+<li>部門が自律的に生成したもの: 「📦部門の成果物」チャンネル</li>
+</ul>
+<hr />
+<h2 id="7-office-canvas">7. Office Canvas 連携</h2>
+<h3 id="_22">仕組み</h3>
+<pre><code>Discord メッセージ
+  → 伝書鳩（Bot）
+    → HMAC 署名付き POST
+      → backend (port 8000) /api/v1/external_event
+        → WebSocket
+          → frontend (port 3000) Canvas 画面
+</code></pre>
+<h3 id="canvas">Canvas 上の表示</h3>
+<ul>
+<li>各部門キャラが Canvas のデスクに表示される</li>
+<li>メッセージが届くとキャラのステータスが変わる</li>
+<li>DiscordTicker（Canvas 画面の下部スクロール帯）に最新メッセージが流れる</li>
+</ul>
+<h3 id="canvas_1">Canvas 接続確認</h3>
+<p>Bot 起動ログに「Canvas announce: N OK, 0 failed」と出ていれば正常。<code>failed</code> が多い場合は backend が起動していない。</p>
+<hr />
+<h2 id="8">8. 起動方法</h2>
+<pre><code class="language-bash"># 依存パッケージのインストール
+pip install discord.py python-dotenv aiohttp
+
+# .env に以下を設定
+DISCORD_BOT_TOKEN=your_bot_token_here
+EXTERNAL_EVENT_SECRET=EqeUaSghh0inJxagunS-Zoyo91_683Ja-6cmWHkNBmQ
+
+# Bot 起動
+python scripts/discord_bot.py
+</code></pre>
+<h3 id="_23">オプション環境変数</h3>
+<table>
+<thead>
+<tr>
+<th>変数名</th>
+<th>デフォルト</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OFFICE_BASE_URL</code></td>
+<td><code>http://localhost:8000</code></td>
+<td>Canvas API の URL</td>
+</tr>
+<tr>
+<td><code>CANVAS_SESSION_ID</code></td>
+<td><code>bridge_live</code></td>
+<td>Canvas セッション ID</td>
+</tr>
+<tr>
+<td><code>HEARTBEAT_INTERVAL</code></td>
+<td><code>300</code>（秒）</td>
+<td>ハートビート間隔</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9">9. トラブルシューティング</h2>
+<h3 id="_24">「インタラクションに失敗しました」と出る</h3>
+<p>古いパネルのボタンを押した時に発生する。Bot 再起動前に作ったパネルが残っている場合に起きる。</p>
+<p><strong>対処</strong>: 古いパネルのメッセージを削除して、<code>/relay_panel</code> で新しく作り直す。</p>
+<h3 id="_25">ボタンを押しても何も起きない</h3>
+<p>Bot が停止している可能性がある。</p>
+<p><strong>対処</strong>: <code>ps aux | grep discord_bot</code> でプロセスを確認。起動していなければ再起動する。</p>
+<h3 id="canvas_2">Canvas にキャラが出ない</h3>
+<p>backend と frontend の両方が起動している必要がある。</p>
+<p><strong>対処</strong>:<br />
+1. backend: <code>http://localhost:8000/api/v1/external_event</code> が応答するか確認<br />
+2. frontend: <code>http://localhost:3000</code> にアクセスできるか確認<br />
+3. ログに「Canvas announce: 0 OK, N failed」と出ていたら backend が起動していない</p>
+<h3 id="bot">Bot がログインできない</h3>
+<p><strong>対処</strong>: <code>.env</code> の <code>DISCORD_BOT_TOKEN</code> が正しいか確認。Discord Developer Portal で Bot Token を再発行する。</p>
+<h3 id="message-content">MESSAGE CONTENT インテントエラー</h3>
+<p><strong>対処</strong>: Discord Developer Portal &gt; Bot &gt; Privileged Gateway Intents &gt; MESSAGE CONTENT INTENT を ON にする。</p>
+<h3 id="canvas_3">部門チャンネルのメッセージが Canvas に届かない</h3>
+<p>Bot がそのチャンネルを監視しているか確認する。<code>部門一覧</code> コマンドで確認できる。</p>
+<h3 id="bot_1">Bot が応答しない（一般的な確認手順）</h3>
+<p>まずログを確認する。</p>
+<pre><code class="language-bash">tail -50 /tmp/claude_office_bot.log
+</code></pre>
+<p>ログに <code>ERROR</code> が出ていればその内容で原因を特定できる。ログファイルがない場合は Bot が起動すらしていない。</p>
+<h3 id="api">API エラーが出る</h3>
+<p><code>.env</code> の <code>ANTHROPIC_API_KEY</code> を確認し、<a href="https://console.anthropic.com">Anthropic Console</a> でクレジット残高を確認する。残高がゼロの場合は API 呼び出しが全て失敗する。</p>
+<h3 id="_26">月間コスト上限に達した</h3>
+<p><code>/cost</code> でコスト状況を確認し、<code>config/autonomous_office.json</code> の <code>monthly_cost_cap_usd</code> の値を引き上げる。</p>
+<pre><code class="language-json">{
+  &quot;monthly_cost_cap_usd&quot;: 30
+}
+</code></pre>
+<p>上限を上げた後、Bot を再起動すると反映される。</p>
+<h3 id="_27">プロセスが途中で落ちた</h3>
+<pre><code class="language-bash"># 残存プロセスを終了
+pkill -f discord_bot.py
+
+# 再起動
+python3 scripts/discord_bot.py
+</code></pre>
+<hr />
+<h2 id="10-ai">10. 部門AIキャラクター一覧</h2>
+<p>15部門のキャラクター、担当チャンネル、専門領域を一覧にまとめる。</p>
+<table>
+<thead>
+<tr>
+<th>部門ID</th>
+<th>キャラ名</th>
+<th>役割</th>
+<th>専門</th>
+<th>チャンネル名</th>
+<th>モデル</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>commander</code></td>
+<td>フィル</td>
+<td>司令塔・統括</td>
+<td>全体戦略・部門調整・えむへの報告</td>
+<td>司令塔</td>
+<td>opus</td>
+</tr>
+<tr>
+<td><code>research</code></td>
+<td>リョウ</td>
+<td>リサーチ部長</td>
+<td>市場調査・ソースチェーン分析・競合調査</td>
+<td>リサーチ部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>sales</code></td>
+<td>レイ</td>
+<td>営業部長</td>
+<td>商談・提案・リード管理・クロージング</td>
+<td>営業部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>design</code></td>
+<td>リック</td>
+<td>デザイン部長</td>
+<td>LP・スライド・デザインシステム・HTML制作</td>
+<td>デザイン部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>content</code></td>
+<td>コウ</td>
+<td>コンテンツ部長</td>
+<td>YouTube台本・スライド・チャンネル在庫管理</td>
+<td>コンテンツ部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>writing</code></td>
+<td>カイ</td>
+<td>ライティング部長</td>
+<td>セールスレター・LP文章・メルマガ・note</td>
+<td>ライティング部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>advertising</code></td>
+<td>エナ</td>
+<td>広告部長</td>
+<td>FB/Instagram/X広告・キャンペーン設計・A/Bテスト</td>
+<td>広告部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>ai_investment</code></td>
+<td>アキ</td>
+<td>AI投資部長</td>
+<td>DeFi・Telegram配信・仮想通貨投資</td>
+<td>AI投資部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>new_biz</code></td>
+<td>タダシ</td>
+<td>新規事業部長</td>
+<td>新規事業壁打ち・市場探索・松竹梅提案</td>
+<td>新規事業部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>phil_consulting</code></td>
+<td>フィル（兼任）</td>
+<td>フィルコンサル部長</td>
+<td>えむ上位概念の翻訳・MD収集・カリキュラム</td>
+<td>フィルコンサル部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>security</code></td>
+<td>セン</td>
+<td>セキュリティ担当</td>
+<td>セキュリティチェック・インシデント対応</td>
+<td>セキュリティ部</td>
+<td>haiku</td>
+</tr>
+<tr>
+<td><code>takumi_x</code></td>
+<td>タクミ</td>
+<td>X運用部長</td>
+<td>タクミアカウントX投稿・画像チェック・重複管理</td>
+<td>タクミX部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>real_estate</code></td>
+<td>アイリ</td>
+<td>不動産部長</td>
+<td>不動産AI秘書・まりこ連携・Telegram配信</td>
+<td>不動産部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>doradora_sns</code></td>
+<td>ドラ助</td>
+<td>どらどらSNS担当</td>
+<td>えむ本人アカウントSNS戦略・投稿管理</td>
+<td>どらどらSNS部</td>
+<td>sonnet</td>
+</tr>
+<tr>
+<td><code>origin_story</code></td>
+<td>コピロボ</td>
+<td>コピーロボット担当</td>
+<td>えむのビリーフ・人生ストーリー再現</td>
+<td>コピーロボット部</td>
+<td>haiku</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_28">注意</h3>
+<ul>
+<li><code>phil_consulting</code> のフィルと <code>commander</code> のフィルは同一キャラの兼任設定。文脈によって使い分ける</li>
+<li><code>security</code> / <code>origin_story</code> は haiku モデルで応答が軽量。コスト優先の部門</li>
+<li><code>bridge</code>（伝書鳩本体）は Bot の内部処理担当で、Discord チャンネルを持たない</li>
+</ul>
+<hr />
+<h2 id="11">11. コスト管理</h2>
+<h3 id="_29">モデル別料金</h3>
+<table>
+<thead>
+<tr>
+<th>モデル</th>
+<th>入力</th>
+<th>出力</th>
+<th>使用部門</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude Sonnet 4</td>
+<td>$3 / 1M トークン</td>
+<td>$15 / 1M トークン</td>
+<td>12部門（主力）</td>
+</tr>
+<tr>
+<td>Claude Opus</td>
+<td>$15 / 1M トークン</td>
+<td>$75 / 1M トークン</td>
+<td>commander のみ</td>
+</tr>
+<tr>
+<td>Claude Haiku</td>
+<td>$0.25 / 1M トークン</td>
+<td>$1.25 / 1M トークン</td>
+<td>security / origin_story</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_30">想定コスト目安</h3>
+<table>
+<thead>
+<tr>
+<th>単位</th>
+<th>内容</th>
+<th>概算</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1サイクル</td>
+<td>15部門が1回ずつ発言</td>
+<td>約 $0.10</td>
+</tr>
+<tr>
+<td>1日</td>
+<td>4時間おき 6サイクル + 定例会議1回</td>
+<td>約 $0.60 〜 $0.80</td>
+</tr>
+<tr>
+<td>1ヶ月</td>
+<td>上記の30日分</td>
+<td>約 $18 〜 $24</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_31">月間上限設定</h3>
+<p>デフォルトの月間上限は $30。<code>config/autonomous_office.json</code> で変更できる。</p>
+<pre><code class="language-json">{
+  &quot;monthly_cost_cap_usd&quot;: 30,
+  &quot;cycle_interval_hours&quot;: 4,
+  &quot;daily_meeting_time_jst&quot;: &quot;14:00&quot;
+}
+</code></pre>
+<p>上限に達すると自発活動が自動停止し、Discord の司令塔チャンネルに通知が届く。<code>/cost</code> でいつでも現在の使用状況を確認できる。</p>
+<h3 id="_32">コスト削減のヒント</h3>
+<ul>
+<li>haiku モデルで対応できる部門（security / origin_story）はすでに haiku に設定済み</li>
+<li><code>/silence</code> で自発活動を止めると1日あたり約 $0.60 を節約できる</li>
+<li>使用頻度の低い部門を発言サイクルから外す場合は <code>config/autonomous_office.json</code> の <code>active_depts</code> リストを編集する</li>
+</ul>
+<hr />
+<h2 id="12">12. アーキテクチャ</h2>
+<p>システム全体の構成を示す。</p>
+<pre><code>Discord サーバー
+    |
+    | (ユーザー入力 / コマンド)
+    v
+discord_bot.py  ─────────────────────────────────
+    |                                             |
+    | (AI 応答生成)                                | (自発活動 / 定例会議)
+    v                                             v
+dept_brain.py                           dept_scheduler.py
+    |                                   dept_meeting.py
+    | (Claude API 呼び出し)                        |
+    v                                             |
+Anthropic API                                     |
+    |                                             |
+    | (応答テキスト)                               |
+    v                                             |
+discord_bot.py  &lt;─────────────────────────────────
+    |
+    | (Discord 投稿 + Canvas 転送)
+    |─────────────────────────────
+    |                            |
+    v                            v
+Discord チャンネル          HMAC 署名付き POST
+(メッセージ表示)                  |
+                                 v
+                        backend (port 8000)
+                        /api/v1/external_event
+                                 |
+                                 v (WebSocket)
+                        frontend (port 3000)
+                        Office Canvas 画面
+                        (キャラ表示 / TickerBar)
+    |
+    | (活動ログの書き戻し)
+    v
+shared_state.json
+(他の Claude Code セッションが参照可能)
+</code></pre>
+<h3 id="_33">主要コンポーネント</h3>
+<table>
+<thead>
+<tr>
+<th>ファイル</th>
+<th>役割</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scripts/discord_bot.py</code></td>
+<td>Bot 本体。Discord イベント処理・コマンド登録・Canvas 転送</td>
+</tr>
+<tr>
+<td><code>scripts/dept_brain.py</code></td>
+<td>部門 AI の応答生成。SOUL.md + shared_state を参照して Claude API を呼ぶ</td>
+</tr>
+<tr>
+<td><code>scripts/dept_scheduler.py</code></td>
+<td>4時間おきの自発活動サイクルを管理</td>
+</tr>
+<tr>
+<td><code>scripts/dept_meeting.py</code></td>
+<td>定例会議・臨時会議の進行を制御</td>
+</tr>
+<tr>
+<td><code>shared_state.json</code></td>
+<td>全部門の現在状態。Discord 活動が自動書き戻しされる</td>
+</tr>
+<tr>
+<td><code>config/autonomous_office.json</code></td>
+<td>コスト上限・サイクル間隔・会議時刻などの設定</td>
+</tr>
+</tbody>
+</table>
+<div class="footer">
+伝書鳩 取り扱い説明書 | 最終更新: 2026-04-22 | ミスターDオフィス
+</div>
+</div>
+</body>
+</html>

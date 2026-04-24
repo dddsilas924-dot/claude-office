@@ -111,8 +111,7 @@ class MemoryBridge:
         """
         entry = self._build_entry(dept_id, user_msg, ai_response)
         async with _write_lock:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._append_entry, entry)
+            await asyncio.to_thread(self._append_entry, entry)
 
     # ------------------------------------------------------------------
     # 内部実装

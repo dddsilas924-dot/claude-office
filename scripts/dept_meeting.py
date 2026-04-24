@@ -186,6 +186,10 @@ class MeetingEngine:
             log.info("=== 会議完了: 「%s」 %d発言 ===", topic, len(history))
             return True
 
+        except asyncio.CancelledError:
+            log.info("会議がキャンセルされました: %s", topic)
+            raise  # CancelledError は再送出して正しくタスク終了させる
+
         except Exception as exc:
             log.exception("会議エラー: %s", exc)
             await self._post(

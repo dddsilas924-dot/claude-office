@@ -1,0 +1,12 @@
+[
+  {
+    "id": "DEV-04241724-001",
+    "title": "LP用の画像最適化APIを追加してほしい",
+    "description": "デザイン部からの依頼。LP（ランディングページ）で使用する画像の最適化を行うAPIの実装。画像サイズ調整、圧縮、形式変換などの機能が必要と想定される。",
+    "from_dept": "デザイン部",
+    "priority": "medium",
+    "category": "new_feature",
+    "status": "pending",
+    "created_at": "2026-04-24T17:24:15.060516+09:00"
+  }
+]

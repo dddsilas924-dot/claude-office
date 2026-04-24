@@ -77,6 +77,41 @@ FORBIDDEN_PATTERNS: list[re.Pattern] = [re.compile(p, re.IGNORECASE) for p in _F
 # ---------------------------------------------------------------------------
 
 _approval_queue: dict[str, dict[str, Any]] = {}
+_APPROVAL_QUEUE_FILE = Path("/tmp/claude_office_approval_queue.json")
+
+
+def _load_approval_queue() -> None:
+    """起動時に永続化ファイルから承認キューを復元する。"""
+    global _approval_queue
+    if not _APPROVAL_QUEUE_FILE.is_file():
+        return
+    try:
+        data = json.loads(_APPROVAL_QUEUE_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            # pending のもののみ復元（completed/approved は不要）
+            _approval_queue = {
+                k: v for k, v in data.items()
+                if isinstance(v, dict) and v.get("status") == "pending"
+            }
+            if _approval_queue:
+                log.info("承認キュー復元: %d 件の pending タスク", len(_approval_queue))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("承認キュー復元エラー: %s", exc)
+
+
+def _persist_approval_queue() -> None:
+    """承認キューをファイルに永続化する。"""
+    try:
+        _APPROVAL_QUEUE_FILE.write_text(
+            json.dumps(_approval_queue, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        log.error("承認キュー永続化エラー: %s", exc)
+
+
+# 起動時に復元
+_load_approval_queue()
 
 # ---------------------------------------------------------------------------
 # メイン クラス
@@ -191,7 +226,19 @@ class InstructionEngine:
                 "error": f"月次上限 ${self._monthly_cap:.2f} に到達済み (現在 ${self._monthly_cost:.2f})",
             }
 
-        workdir = self._workdir_map.get(dept_id, str(Path.home()))
+        # dept_id ホワイトリスト検証: 不正な部門IDは即拒否
+        if dept_id not in self._workdir_map:
+            log.warning("不正な dept_id: %s — 実行拒否", dept_id)
+            return {
+                "status": "error",
+                "result": "",
+                "cost": 0,
+                "duration_sec": 0,
+                "session_id": "",
+                "error": f"不正な部門ID: {dept_id}",
+            }
+
+        workdir = self._workdir_map[dept_id]
 
         # タスク長制限（コスト爆発+インジェクション防止）+ 構造的分離
         task_safe = task[:500]
@@ -319,6 +366,7 @@ class InstructionEngine:
         }
 
         log.info("承認キュー追加: %s dept=%s task=%r", inst_id, dept_id, task[:50])
+        _persist_approval_queue()
         return inst_id
 
     def get_queued(self, inst_id: str) -> dict[str, Any] | None:
@@ -336,6 +384,7 @@ class InstructionEngine:
         """承認済みにマーク。"""
         if inst_id in _approval_queue:
             _approval_queue[inst_id]["status"] = "approved"
+            _persist_approval_queue()
             return True
         return False
 
@@ -344,6 +393,7 @@ class InstructionEngine:
         if inst_id in _approval_queue:
             _approval_queue[inst_id]["status"] = "completed"
             _approval_queue[inst_id]["result"] = result
+            _persist_approval_queue()
 
     # ----- 永続化 -----
 

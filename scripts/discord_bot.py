@@ -54,6 +54,7 @@ import hmac
 import json
 import logging
 import os
+import io
 import re
 import signal
 import sys
@@ -153,6 +154,71 @@ HEARTBEAT_INTERVAL: int = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))  # �
 GUILD_ID: int = int(os.environ.get("DISCORD_SERVER_ID", os.environ.get("DISCORD_GUILD_ID", "0")))
 JST = timezone(timedelta(hours=9))
 
+# ---------------------------------------------------------------------------
+# Phase 4: アバター・UX・安全系 定数
+# ---------------------------------------------------------------------------
+_SPRITES_DIR: Path = Path(__file__).parent.parent / "frontend" / "public" / "sprites" / "characters"
+
+# dept_id → スプライトファイル名のオーバーライド（dept_id.png と一致しない場合のみ）
+_AVATAR_OVERRIDE: dict[str, str] = {
+    "takumi_x": "char_takumi.png",
+    "doradora_sns": "commander.png",  # 専用アバターなし → 司令塔で代用
+    "development": "bridge.png",  # 開発部 → Bridge画像で代用
+}
+
+# APIコスト上限（1日あたり / 月あたり）— 顧客に使い放題させない安全装置
+DAILY_API_COST_LIMIT: float = float(os.environ.get("DAILY_API_COST_LIMIT", "5.0"))   # $5/日
+MONTHLY_API_COST_LIMIT: float = float(os.environ.get("MONTHLY_API_COST_LIMIT", "100.0"))  # $100/月
+
+# メッセージカウンター（/usage用）
+_msg_counter: dict[str, int] = {}  # dept_id → 今日のメッセージ数
+_msg_counter_date: str = ""  # YYYY-MM-DD
+
+# 朝ブリーフィング時刻
+MORNING_BRIEFING_HOUR: int = int(os.environ.get("MORNING_BRIEFING_HOUR", "8"))
+
+# Webhook用アバターCDN URLキャッシュ（起動時にDiscordにアップロードして取得）
+_avatar_urls: dict[str, str] = {}  # dept_id → Discord CDN URL
+
+# 動的ステータスメッセージ
+_STATUS_MESSAGES: list[str] = [
+    "全15部門を監視中",
+    "Canvas ブリッジ稼働中",
+    "部門AI 常時スタンバイ",
+    "ミスターDオフィス運営中",
+    "自律オフィス稼働中",
+]
+
+
+def _get_avatar_file(dept_id: str) -> discord.File | None:
+    """部門IDに対応するピクセルアートアバターのdiscord.Fileを返す。"""
+    filename = _AVATAR_OVERRIDE.get(dept_id, f"{dept_id}.png")
+    path = _SPRITES_DIR / filename
+    if path.is_file():
+        return discord.File(str(path), filename=filename)
+    return None
+
+
+def _get_avatar_filename(dept_id: str) -> str:
+    """アバターファイル名を返す（attachment:// URL用）。"""
+    return _AVATAR_OVERRIDE.get(dept_id, f"{dept_id}.png")
+
+
+def _sanitize_markdown(text: str) -> str:
+    """ユーザー入力に含まれるDiscord Markdown Injectionを無害化する。"""
+    return discord.utils.escape_markdown(text)
+
+
+def _increment_msg_counter(dept_id: str) -> None:
+    """部門別メッセージカウンターをインクリメントする。"""
+    global _msg_counter_date
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    if _msg_counter_date != today:
+        _msg_counter.clear()
+        _msg_counter_date = today
+    _msg_counter[dept_id] = _msg_counter.get(dept_id, 0) + 1
+
+
 # どら（CEO）のDiscord User ID — /run, /approve はこのユーザーのみ実行可能
 ALLOWED_USER_IDS: set[int] = {
     int(os.environ.get("DISCORD_OWNER_ID", "0")),
@@ -161,6 +227,13 @@ ALLOWED_USER_IDS: set[int] = {
 
 # 添付ファイルのテキスト最大文字数
 ATTACHMENT_TEXT_MAX = 2000
+
+# メッセージ重複排除: 最近処理済みのメッセージIDを保持（Gatewayの再送信対策）
+_PROCESSED_MSG_IDS: set[int] = set()
+_PROCESSED_MSG_MAX = 200  # 保持する最大件数
+
+# PIDファイル: 二重起動を防止（商品化向け安全策）
+_PID_FILE = Path("/tmp/claude_office_discord_bot.pid")
 
 # ---------------------------------------------------------------------------
 # チャンネル定義
@@ -343,6 +416,15 @@ CHARACTERS: list[dict[str, Any]] = [
         "icon": "🤖",
         "role": "コピーロボット担当",
     },
+    {
+        "dept_id": "development",
+        "display_name": "🔧 ムー（開発）",
+        "agent_color": "#00BCD4",
+        "model": "haiku",
+        "discord_color": 0x00BCD4,
+        "icon": "🔧",
+        "role": "開発部長",
+    },
 ]
 
 # dept_id → キャラ情報 の辞書
@@ -365,6 +447,7 @@ CHANNEL_TO_DEPT_ID: dict[str, str] = {
     "不動産部": "real_estate",
     "どらどらSNS部": "doradora_sns",
     "セキュリティ部": "security",
+    "開発部": "development",
     "会議室": "commander",
     "司令塔ログ": "commander",
 }
@@ -387,6 +470,7 @@ RELAY_DEPT_TO_CHANNEL: dict[str, str] = {
     "real_estate": "不動産部",
     "doradora_sns": "どらどらSNS部",
     "origin_story": "コピーロボット部",
+    "development": "開発部",
 }
 
 # ハートビートで使うステータスメッセージ (循環してマンネリを防ぐ)
@@ -515,7 +599,7 @@ CATEGORY_STRUCTURE: dict[str, list[str]] = {
     "🚀 特殊部門": ["新規事業部", "AI投資部", "フィルコンサル部", "不動産部"],
     "📣 SNS・ブランディング": ["タクミX部", "どらどらSNS部", "コピーロボット部"],
     "📦 保管庫": ["📦ドラの成果物", "📦部門の成果物"],
-    "🔧 システム管理": ["📊ステータス", "司令塔ログ", "セキュリティ部"],
+    "🔧 システム管理": ["📊ステータス", "司令塔ログ", "セキュリティ部", "開発部"],
 }
 
 # ---------------------------------------------------------------------------
@@ -1019,6 +1103,217 @@ class RelayPanelView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: AI返答ボタン — AIResponseView
+# ---------------------------------------------------------------------------
+
+class ForwardDeptSelect(discord.ui.Select):
+    """転送先の部門を選択するセレクトメニュー。"""
+
+    def __init__(self, original_text: str, from_dept_id: str) -> None:
+        self._original_text = original_text
+        self._from_dept_id = from_dept_id
+        options = []
+        for char in CHARACTERS:
+            if char["dept_id"] in ("bridge", from_dept_id):
+                continue
+            options.append(
+                discord.SelectOption(
+                    label=char["display_name"],
+                    value=char["dept_id"],
+                    description=char.get("role", ""),
+                )
+            )
+        # Discord の Select は最大25件
+        super().__init__(
+            placeholder="転送先の部門を選んでください...",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            custom_id=f"fwd_select_{from_dept_id}_{int(time.time())}",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        target_dept = self.values[0]
+        target_char = CHAR_BY_DEPT.get(target_dept)
+        if not target_char:
+            await interaction.response.send_message("部門が見つかりません。", ephemeral=True)
+            return
+
+        # 転送先チャンネルに送信
+        channel_name = RELAY_DEPT_TO_CHANNEL.get(target_dept)
+        if not channel_name or not interaction.guild:
+            await interaction.response.send_message("転送先チャンネルが見つかりません。", ephemeral=True)
+            return
+
+        ch_id = CHANNELS.get(channel_name)
+        if not ch_id:
+            await interaction.response.send_message("チャンネルIDが見つかりません。", ephemeral=True)
+            return
+
+        ch = interaction.guild.get_channel(ch_id)
+        if not isinstance(ch, discord.TextChannel):
+            await interaction.response.send_message("テキストチャンネルが見つかりません。", ephemeral=True)
+            return
+
+        from_char = CHAR_BY_DEPT.get(self._from_dept_id, CHAR_BY_DEPT.get("bridge"))
+        snippet = self._original_text[:300]
+        if len(self._original_text) > 300:
+            snippet += "..."
+
+        fwd_embed = discord.Embed(
+            title=f"転送: {from_char['display_name']} → {target_char['display_name']}",
+            description=snippet,
+            color=from_char["discord_color"],
+            timestamp=datetime.now(timezone.utc),
+        )
+        fwd_embed.set_footer(text=f"転送者: {interaction.user.display_name}")
+
+        # アバター付きで送信（Webhook CDN URLがあればそれを使う）
+        avatar_cdn = _avatar_urls.get(self._from_dept_id)
+        if avatar_cdn:
+            fwd_embed.set_author(
+                name=from_char["display_name"],
+                icon_url=avatar_cdn,
+            )
+        else:
+            avatar = _get_avatar_file(self._from_dept_id)
+            if avatar:
+                fwd_embed.set_author(
+                    name=from_char["display_name"],
+                    icon_url=f"attachment://{_get_avatar_filename(self._from_dept_id)}",
+                )
+
+        kwargs: dict[str, Any] = {"embed": fwd_embed}
+        if not avatar_cdn:
+            avatar_fb = _get_avatar_file(self._from_dept_id)
+            if avatar_fb:
+                kwargs["file"] = avatar_fb
+
+        try:
+            await ch.send(**kwargs)
+            await interaction.response.send_message(
+                f"{target_char['display_name']} に転送しました。",
+                ephemeral=True,
+            )
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(f"転送エラー: {exc}", ephemeral=True)
+
+
+class ForwardSelectView(discord.ui.View):
+    """転送先セレクトメニューを包むView。"""
+
+    def __init__(self, original_text: str, from_dept_id: str) -> None:
+        super().__init__(timeout=120)
+        self.add_item(ForwardDeptSelect(original_text, from_dept_id))
+
+
+class AIResponseView(discord.ui.View):
+    """
+    AI返答に付けるインタラクティブボタン。
+    - 深掘りする → スレッド作成
+    - 別部門に転送 → セレクトメニュー表示
+    - 保存する → memory_bridgeに保存
+    """
+
+    def __init__(
+        self,
+        dept_id: str,
+        response_text: str,
+        user_msg: str,
+        bot_ref: "CommanderBridgeBot",
+    ) -> None:
+        super().__init__(timeout=300)  # 5分でタイムアウト
+        self._dept_id = dept_id
+        self._response_text = response_text
+        self._user_msg = user_msg
+        self._bot = bot_ref
+
+    @discord.ui.button(
+        label="深掘りする",
+        style=discord.ButtonStyle.primary,
+        emoji="🔍",
+    )
+    async def btn_deep_dive(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """スレッドを作成して深掘り会話を続ける。"""
+        msg = interaction.message
+        if msg is None:
+            await interaction.response.send_message("メッセージが見つかりません。", ephemeral=True)
+            return
+
+        char = CHAR_BY_DEPT.get(self._dept_id, CHAR_BY_DEPT.get("bridge"))
+        dept_name = char["display_name"] if char else self._dept_id
+        topic_preview = self._user_msg[:30] if self._user_msg else "深掘り"
+        thread_name = f"{dept_name} — {topic_preview}"
+
+        try:
+            thread = await msg.create_thread(
+                name=thread_name[:100],  # Discord制限: 100文字
+                auto_archive_duration=1440,  # 24時間で自動アーカイブ
+            )
+            await interaction.response.send_message(
+                f"スレッドを作成しました → {thread.mention}\nこの話題を深掘りしたいことを書いてください。",
+                ephemeral=True,
+            )
+            # スレッド内に案内を投稿
+            guide_embed = discord.Embed(
+                description=(
+                    f"このスレッドでは **{dept_name}** との深掘り会話ができます。\n"
+                    f"自由に質問・指示を書いてください。AIが返答します。"
+                ),
+                color=char["discord_color"] if char else 0x95A5A6,
+            )
+            guide_embed.set_footer(text="スレッド内メッセージもAIが返答します")
+            await thread.send(embed=guide_embed)
+        except discord.HTTPException as exc:
+            log.error("スレッド作成エラー: %s", exc)
+            await interaction.response.send_message(
+                f"スレッド作成に失敗しました: {exc}", ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="別部門に転送",
+        style=discord.ButtonStyle.secondary,
+        emoji="➡️",
+    )
+    async def btn_forward(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """転送先部門のセレクトメニューを表示する。"""
+        view = ForwardSelectView(self._response_text, self._dept_id)
+        await interaction.response.send_message(
+            "転送先の部門を選択してください:",
+            view=view,
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="保存する",
+        style=discord.ButtonStyle.success,
+        emoji="⭐",
+    )
+    async def btn_save(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """会話をmemory_bridgeに保存する。"""
+        if self._bot._memory_bridge:
+            try:
+                await self._bot._memory_bridge.save_conversation(
+                    dept_id=self._dept_id,
+                    user_msg=self._user_msg,
+                    ai_response=self._response_text,
+                )
+                await interaction.response.send_message(
+                    "会話をメモリに保存しました。次のClaude Codeセッションで参照されます。",
+                    ephemeral=True,
+                )
+            except Exception as exc:
+                log.error("memory_bridge保存エラー: %s", exc)
+                await interaction.response.send_message(
+                    f"保存に失敗しました: {exc}", ephemeral=True,
+                )
+        else:
+            await interaction.response.send_message(
+                "メモリブリッジが初期化されていません。", ephemeral=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Discord Bot クラス
 # ---------------------------------------------------------------------------
 
@@ -1028,6 +1323,8 @@ class CommanderBridgeBot(discord.Client):
         intents.message_content = True
         intents.guilds = True
         intents.messages = True
+        intents.reactions = True
+        intents.members = True  # ウェルカムメッセージ用
 
         super().__init__(
             intents=intents,
@@ -1060,6 +1357,11 @@ class CommanderBridgeBot(discord.Client):
         self._digest_collector: "DigestCollector | None" = None
         self._digest_scheduler: "DigestScheduler | None" = None
 
+        # --- Phase 4: UX・アバター・安全系 ---
+        self._morning_task: asyncio.Task | None = None
+        self._status_idx: int = 0
+        self._webhook_cache: dict[int, discord.Webhook] = {}  # channel_id → Webhook
+
     # ------------------------------------------------------------------
     # ライフサイクル
     # ------------------------------------------------------------------
@@ -1069,6 +1371,7 @@ class CommanderBridgeBot(discord.Client):
         # TASK-03: 永続 View を登録 (Bot 再起動後もボタンが動作する)
         self.add_view(RelayPanelView())
         log.info("RelayPanelView registered as persistent view.")
+        log.info("Phase 4: AIResponseView / ForwardSelectView 利用可能")
 
         guild = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild)
@@ -1099,6 +1402,12 @@ class CommanderBridgeBot(discord.Client):
 
             # TASK-02: サーバー名を「ミスターDオフィス」に変更 (冪等)
             await self._ensure_guild_name("ミスターDオフィス")
+
+            # Phase 4: Botプロフィール画像をフィルのピクセルアートに設定（初回のみ）
+            await self._ensure_bot_avatar()
+
+            # Phase 4: 全部門アバターをDiscordにアップロード → CDN URLキャッシュ（Webhook用）
+            await self._ensure_avatar_urls()
 
             # 改善1・6・7: カテゴリ整理 + ステータス/日報チャンネル自動作成 (保管庫も統合)
             await self._ensure_server_structure()
@@ -1145,6 +1454,13 @@ class CommanderBridgeBot(discord.Client):
 
         # --- Phase 3: 品質・記録機能初期化 ---
         await self._init_phase3()
+
+        # --- Phase 4: 朝ブリーフィングスケジューラー ---
+        if self._morning_task is None or self._morning_task.done():
+            self._morning_task = asyncio.create_task(
+                self._morning_briefing_loop(), name="morning_briefing"
+            )
+            log.info("朝ブリーフィングスケジューラー開始 (毎日 %02d:00 JST)", MORNING_BRIEFING_HOUR)
 
         log.info("伝書鳩: 完全起動完了。Heartbeat interval: %ds", HEARTBEAT_INTERVAL)
 
@@ -1279,54 +1595,102 @@ class CommanderBridgeBot(discord.Client):
         content: str,
         author_name: str,
     ) -> None:
-        """部門AIがメッセージに返答する (REQ-001)。"""
+        """部門AIがメッセージに返答する (REQ-001)。Phase 4: タイピング・アバター・ボタン・安全系対応。"""
         if not self._dept_brain:
             return
 
         try:
-            # コンテキスト収集: チャンネルの直近5件
-            context = []
-            limit = self._dept_brain.config.get("context_history_limit", 5)
-            async for hist_msg in message.channel.history(limit=limit + 1):
-                if hist_msg.id == message.id:
-                    continue
-                role = "assistant" if hist_msg.author == self.user else "user"
-                ctx_content = hist_msg.content or ""
-                if hist_msg.embeds and not ctx_content:
-                    # embed の description を取得
-                    ctx_content = hist_msg.embeds[0].description or ""
-                if ctx_content:
-                    context.append({"role": role, "content": ctx_content})
-            context.reverse()  # 古い順に
+            # Phase 4: APIコスト上限チェック
+            if hasattr(self._dept_brain, 'monthly_cost'):
+                if self._dept_brain.monthly_cost >= MONTHLY_API_COST_LIMIT:
+                    log.warning("月間APIコスト上限到達: $%.2f >= $%.2f", self._dept_brain.monthly_cost, MONTHLY_API_COST_LIMIT)
+                    warn_embed = discord.Embed(
+                        description="月間APIコスト上限に達しました。管理者に連絡してください。",
+                        color=0xFF0000,
+                    )
+                    await message.channel.send(embed=warn_embed)
+                    return
 
-            # AI返答生成
-            response = await self._dept_brain.respond(
-                dept_id=dept_id,
-                message=content,
-                context=context,
-                sender=author_name,
-            )
+            # Phase 4: タイピングインジケーター表示
+            async with message.channel.typing():
+                # コンテキスト収集: チャンネルの直近5件
+                context = []
+                limit = self._dept_brain.config.get("context_history_limit", 5)
+                async for hist_msg in message.channel.history(limit=limit + 1):
+                    if hist_msg.id == message.id:
+                        continue
+                    role = "assistant" if hist_msg.author == self.user else "user"
+                    ctx_content = hist_msg.content or ""
+                    if hist_msg.embeds and not ctx_content:
+                        # embed の description を取得
+                        ctx_content = hist_msg.embeds[0].description or ""
+                    if ctx_content:
+                        context.append({"role": role, "content": ctx_content})
+                context.reverse()  # 古い順に
+
+                # Phase 4: Markdown Injection対策（ユーザー入力をサニタイズ）
+                safe_content = _sanitize_markdown(content)
+
+                # AI返答生成（ツール使用対応: attachmentsに画像バイト列が入る場合あり）
+                response, attachments = await self._dept_brain.respond(
+                    dept_id=dept_id,
+                    message=content,  # AI側には原文を渡す
+                    context=context,
+                    sender=author_name,
+                )
 
             if not response:
                 return
+
+            # Phase 4: メッセージカウンター更新
+            _increment_msg_counter(dept_id)
 
             # キャラ情報取得
             char = CHAR_BY_DEPT.get(dept_id, CHAR_BY_DEPT.get("bridge"))
             if not char:
                 return
 
-            # Embed形式で返答投稿
+            # Phase 4: Embed形式で返答投稿（Webhook アバター付き）
             embed = discord.Embed(
                 description=response,
                 color=char["discord_color"],
                 timestamp=datetime.now(timezone.utc),
             )
-            embed.set_author(
-                name=f"{char['display_name']} (返答)",
-            )
+            # Webhookでサムネイルも部門アバターにする
+            avatar_cdn = _avatar_urls.get(dept_id)
+            if avatar_cdn:
+                embed.set_thumbnail(url=avatar_cdn)
             embed.set_footer(text="ミスターDオフィス AI返答")
 
-            await message.channel.send(embed=embed)
+            # Phase 4: インタラクティブボタンを付与
+            view = AIResponseView(
+                dept_id=dept_id,
+                response_text=response,
+                user_msg=content,
+                bot_ref=self,
+            )
+
+            # ツール生成画像をdiscord.Fileに変換
+            discord_files: list[discord.File] = []
+            for filename_hint, image_bytes in attachments:
+                discord_files.append(
+                    discord.File(io.BytesIO(image_bytes), filename=filename_hint)
+                )
+
+            # Phase 4: Webhook送信（部門キャラのアバターがプロフィール画像として表示）
+            sent_msg = await self._send_as_dept(
+                channel=message.channel,
+                dept_id=dept_id,
+                embed=embed,
+                view=view,
+            )
+
+            # 画像添付ファイルを別途送信（Webhookは files= を直接受け取れないため）
+            if discord_files:
+                try:
+                    await message.channel.send(files=discord_files)
+                except Exception as _file_exc:
+                    log.warning("画像ファイル送信エラー: %s", _file_exc)
 
             # Canvas にも送信
             await send_canvas_event(
@@ -1336,11 +1700,11 @@ class CommanderBridgeBot(discord.Client):
             )
 
             # 成果物判定 (REQ-004)
-            if self._dept_brain.is_deliverable(response):
+            if sent_msg and self._dept_brain.is_deliverable(response):
                 await self._store_deliverable(
                     dept_id=dept_id,
                     text=response,
-                    source_message=message,
+                    source_message=sent_msg,
                     is_relay=False,
                 )
 
@@ -1355,17 +1719,9 @@ class CommanderBridgeBot(discord.Client):
                     log_type="respond",
                 )
 
-            # Phase 3: memory自動保存 (P-13) → 無効化
+            # Phase 3: memory自動保存 (P-13) → 無効化（ボタン経由の手動保存に変更）
             # 設計方針: Discordは「ホワイトボード（アイデアの場）」。
-            # AI生成テキストにはハルシネーションが含まれる可能性がある。
-            # Claude Code側のmemoryに自動保存すると嘘が「事実」として記録される。
-            # ドラが「これ採用」と判断したものだけClaude Codeセッションで手動記録する。
-            # if self._memory_bridge:
-            #     await self._memory_bridge.save_conversation(
-            #         dept_id=dept_id,
-            #         user_msg=content,
-            #         ai_response=response,
-            #     )
+            # ドラが「保存する」ボタンを押したものだけmemoryに記録される。
 
             # Phase 3: 部門間依頼自動検出 (P-08)
             if self._dept_request_manager:
@@ -1376,7 +1732,7 @@ class CommanderBridgeBot(discord.Client):
                 )
 
             log.info(
-                "部門AI返答: %s → %s (%.0f文字)",
+                "部門AI返答: %s → %s (%.0f文字, webhook=yes, buttons=yes)",
                 dept_id, author_name, len(response),
             )
 
@@ -1405,17 +1761,21 @@ class CommanderBridgeBot(discord.Client):
         if not char:
             return
 
-        # Embed形式で投稿
+        # Embed形式で投稿（Phase 4: Webhook アバター付き）
         embed = discord.Embed(
             description=text,
             color=char["discord_color"],
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_author(name=f"{char['display_name']} (自発活動)")
         embed.set_footer(text="ミスターDオフィス 自律活動")
 
         try:
-            sent_msg = await channel.send(embed=embed)
+            sent_msg = await self._send_as_dept(
+                channel=channel,
+                dept_id=dept_id,
+                embed=embed,
+                author_name=f"{char['display_name']} (自発活動)",
+            )
 
             # Canvas反映
             await send_canvas_event(
@@ -1468,7 +1828,8 @@ class CommanderBridgeBot(discord.Client):
             return
 
         color = 0x58A6FF if is_phil else 0xD4AF37  # フィル=青, どら=金
-        author_name = "フィル（司令塔）" if is_phil else "どらどら"
+        author_label = "フィル（司令塔）" if is_phil else "どらどら"
+        dept = "commander" if is_phil else "doradora_sns"
 
         embed = discord.Embed(
             title=title,
@@ -1476,11 +1837,15 @@ class CommanderBridgeBot(discord.Client):
             color=color,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_author(name=f"{author_name} (日報)")
         embed.set_footer(text="ミスターDオフィス 日報")
 
         try:
-            await channel.send(embed=embed)
+            await self._send_as_dept(
+                channel=channel,
+                dept_id=dept,
+                embed=embed,
+                author_name=f"{author_label} (日報)",
+            )
         except discord.HTTPException as exc:
             log.error("日報投稿エラー: %s", exc)
 
@@ -1509,14 +1874,17 @@ class CommanderBridgeBot(discord.Client):
         )
         if embed_title:
             embed.title = embed_title
-        embed.set_author(name=char["display_name"])
         embed.set_footer(text="ミスターDオフィス 会議室")
 
         try:
-            sent_msg = await channel.send(embed=embed)
+            sent_msg = await self._send_as_dept(
+                channel=channel,
+                dept_id=dept_id,
+                embed=embed,
+            )
 
             # 成果物判定 (会議まとめは成果物)
-            if self._dept_brain and self._dept_brain.is_deliverable(text):
+            if sent_msg and self._dept_brain and self._dept_brain.is_deliverable(text):
                 await self._store_deliverable(
                     dept_id=dept_id,
                     text=text,
@@ -1541,21 +1909,21 @@ class CommanderBridgeBot(discord.Client):
         if not isinstance(channel, discord.TextChannel):
             return
 
-        char = CHAR_BY_DEPT.get("commander")
-        if not char:
-            return
-
         embed = discord.Embed(
             title="会議からのアクションアイテム",
             description=action_text,
             color=0xD4AF37,
             timestamp=datetime.now(timezone.utc),
         )
-        embed.set_author(name="フィル（司令塔）")
         embed.set_footer(text="会議室 → 部門転送")
 
         try:
-            await channel.send(embed=embed)
+            await self._send_as_dept(
+                channel=channel,
+                dept_id="commander",
+                embed=embed,
+                author_name="フィル（司令塔）",
+            )
         except discord.HTTPException as exc:
             log.error("アクションフォワードエラー (%s): %s", dept_id, exc)
 
@@ -1611,9 +1979,11 @@ class CommanderBridgeBot(discord.Client):
         )
         embed.set_footer(text=f"自動保管 | {storage_name}")
 
+        import tempfile
+        import os as _os_store
+        tmp_path: str | None = None
         try:
             # 成果物全文をMDファイルとしてアップロード
-            import tempfile
             now_str = datetime.now(timezone(timedelta(hours=9))).strftime("%Y%m%d_%H%M")
             dept_name = char.get("display_name", dept_id)
             filename = f"成果物_{dept_name}_{now_str}.md"
@@ -1630,13 +2000,15 @@ class CommanderBridgeBot(discord.Client):
             file = discord.File(tmp_path, filename=filename)
             await storage_ch.send(embed=embed, file=file)
 
-            # 一時ファイル削除
-            import os
-            os.unlink(tmp_path)
-
             log.info("成果物保管 (ファイル付き): %s → %s [%s]", dept_id, storage_name, filename)
         except discord.HTTPException as exc:
             log.error("成果物保管エラー: %s", exc)
+        finally:
+            if tmp_path:
+                try:
+                    _os_store.unlink(tmp_path)
+                except OSError:
+                    pass
 
         # クロスポスト: 成果物を関連部門に共有 (is_relay=True の場合はドラ直接指示なので除外)
         if not is_relay and self._guild is not None:
@@ -1670,6 +2042,207 @@ class CommanderBridgeBot(discord.Client):
             log.warning("MANAGE_GUILD 権限不足: サーバー名変更をスキップします。")
         except discord.HTTPException as exc:
             log.error("サーバー名変更エラー: %s", exc)
+
+    async def _ensure_bot_avatar(self) -> None:
+        """Botのプロフィール画像をフィル（司令塔）のピクセルアートに設定する。冪等。"""
+        avatar_path = _SPRITES_DIR / "commander.png"
+        if not avatar_path.is_file():
+            log.warning("Botアバター画像が見つかりません: %s", avatar_path)
+            return
+        try:
+            avatar_bytes = avatar_path.read_bytes()
+            await self.user.edit(avatar=avatar_bytes)  # type: ignore[union-attr]
+            log.info("Botプロフィール画像をフィルのピクセルアートに設定しました")
+        except discord.HTTPException as exc:
+            # レート制限等で失敗しても致命的ではない
+            if exc.status == 429 or "Too many" in str(exc):
+                log.info("Botアバター変更レート制限 — 既に設定済みか次回再試行")
+            else:
+                log.warning("Botアバター設定エラー: %s", exc)
+        except Exception as exc:
+            log.warning("Botアバター設定エラー: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 4: Webhook アバターシステム（全部門ピクセルアート対応）
+    # ------------------------------------------------------------------
+
+    async def _ensure_avatar_urls(self) -> None:
+        """起動時に全部門のスプライトをDiscordにアップロードしてCDN URLをキャッシュする。"""
+        global _avatar_urls
+        if _avatar_urls:
+            return  # 既にキャッシュ済み
+
+        if not self._guild:
+            return
+
+        # 司令塔ログチャンネルにアップロード（ユーザーに見えにくい場所）
+        log_ch_id = CHANNELS.get("司令塔ログ")
+        if not log_ch_id:
+            log.warning("司令塔ログチャンネル未設定 — アバターURL初期化スキップ")
+            return
+        channel = self._guild.get_channel(log_ch_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        # 全部門のスプライトファイルを収集
+        files_to_upload: list[tuple[str, Path]] = []
+        for char in CHARACTERS:
+            dept_id = char["dept_id"]
+            filename = _AVATAR_OVERRIDE.get(dept_id, f"{dept_id}.png")
+            path = _SPRITES_DIR / filename
+            if path.is_file():
+                files_to_upload.append((dept_id, path))
+            else:
+                log.warning("スプライト未発見: %s → %s", dept_id, path)
+
+        if not files_to_upload:
+            log.warning("アバタースプライトが見つかりません: %s", _SPRITES_DIR)
+            return
+
+        # バッチアップロード（Discord制限: 1メッセージ最大10ファイル）
+        batch_size = 10
+        for i in range(0, len(files_to_upload), batch_size):
+            batch = files_to_upload[i:i + batch_size]
+            discord_files = []
+            dept_ids_in_batch = []
+            for dept_id, path in batch:
+                # ファイル名にdept_idを含めて一意にする
+                discord_files.append(discord.File(str(path), filename=f"avatar_{dept_id}.png"))
+                dept_ids_in_batch.append(dept_id)
+
+            try:
+                msg = await channel.send(
+                    content=f"🎨 アバター初期化 (バッチ {i // batch_size + 1})",
+                    files=discord_files,
+                )
+                # 添付ファイルからCDN URLを取得（送信順 = 添付順）
+                for attachment, dept_id in zip(msg.attachments, dept_ids_in_batch):
+                    _avatar_urls[dept_id] = attachment.url
+                    log.debug("アバターURL登録: %s → %s", dept_id, attachment.url[:80])
+            except discord.HTTPException as exc:
+                log.error("アバターアップロードエラー (バッチ %d): %s", i // batch_size + 1, exc)
+
+        log.info("アバターURL初期化完了: %d/%d 部門", len(_avatar_urls), len(files_to_upload))
+
+    async def _get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook | None:
+        """チャンネルのWebhookを取得または作成する（1チャンネル1Webhook方式）。"""
+        # キャッシュチェック
+        if channel.id in self._webhook_cache:
+            return self._webhook_cache[channel.id]
+
+        webhook_name = "ミスターDオフィス"
+
+        try:
+            # 既存Webhookを検索
+            webhooks = await channel.webhooks()
+            for wh in webhooks:
+                if wh.name == webhook_name and wh.user == self.user:
+                    self._webhook_cache[channel.id] = wh
+                    return wh
+
+            # 新規作成（権限: manage_webhooks が必要）
+            wh = await channel.create_webhook(name=webhook_name)
+            self._webhook_cache[channel.id] = wh
+            log.info("Webhook作成: #%s → %s", channel.name, wh.id)
+            return wh
+
+        except discord.Forbidden:
+            log.warning("Webhook作成権限なし: #%s — フォールバック使用", channel.name)
+            return None
+        except discord.HTTPException as exc:
+            log.warning("Webhook取得/作成エラー (#%s): %s", channel.name, exc)
+            return None
+
+    async def _send_as_dept(
+        self,
+        channel: discord.TextChannel | discord.Thread,
+        dept_id: str,
+        embed: discord.Embed,
+        *,
+        author_name: str | None = None,
+        view: discord.ui.View | None = None,
+        content: str | None = None,
+    ) -> discord.Message | None:
+        """Webhook経由で部門キャラのアバター付きメッセージを送信する。
+
+        Webhookが使えない場合はembed attachment方式にフォールバック。
+
+        Args:
+            channel: 送信先チャンネル（Threadも対応）
+            dept_id: 部門ID
+            embed: 送信するEmbed（set_authorは本メソッドが設定する）
+            author_name: 表示名オーバーライド（例: "フィル（司令塔） 朝ブリーフィング"）
+            view: ボタン等のView
+            content: Embed以外のテキスト
+        """
+        char = CHAR_BY_DEPT.get(dept_id, CHAR_BY_DEPT.get("bridge"))
+        if not char:
+            return None
+
+        # 表示名の決定
+        display = author_name or char["display_name"]
+        # Webhook用の名前（emoji除去、Discord username制限80文字）
+        wh_name_parts = display.split(" ", 1)
+        wh_username = wh_name_parts[1] if len(wh_name_parts) > 1 and wh_name_parts[0].strip() else display
+        wh_username = wh_username[:80]
+
+        avatar_url = _avatar_urls.get(dept_id)
+
+        # スレッド対応: Thread → 親チャンネルのWebhookを使い、thread引数で送信先指定
+        target_channel = channel
+        thread_arg: discord.Thread | None = None
+        if isinstance(channel, discord.Thread):
+            parent = channel.parent
+            if parent and isinstance(parent, discord.TextChannel):
+                target_channel = parent
+                thread_arg = channel
+            # parentが取れない場合はそのままフォールバックへ
+
+        # --- Webhook送信 ---
+        # 重要: view（ボタン等）がある場合はWebhookを使わない。
+        # Webhook経由のメッセージはインタラクションがBotに届かないDiscord仕様のため、
+        # ボタン付きメッセージは通常の channel.send() で送信する。
+        if avatar_url and isinstance(target_channel, discord.TextChannel) and view is None:
+            try:
+                webhook = await self._get_or_create_webhook(target_channel)
+                if webhook:
+                    # Webhook送信時もembed.authorを設定（embed内に名前を表示）
+                    embed.set_author(name=display, icon_url=avatar_url)
+
+                    send_kw: dict[str, Any] = {
+                        "embed": embed,
+                        "username": wh_username,
+                        "avatar_url": avatar_url,
+                        "wait": True,
+                    }
+                    if content:
+                        send_kw["content"] = content
+                    if thread_arg:
+                        send_kw["thread"] = thread_arg
+
+                    sent = await webhook.send(**send_kw)
+                    return sent
+            except discord.HTTPException as exc:
+                log.warning("Webhook送信失敗 (%s→#%s): %s — フォールバック",
+                            dept_id, getattr(target_channel, 'name', '?'), exc)
+
+        # --- フォールバック: embed + attachment方式 ---
+        avatar_file = _get_avatar_file(dept_id)
+        send_kw_fb: dict[str, Any] = {"embed": embed}
+
+        if avatar_file:
+            avatar_fn = _get_avatar_filename(dept_id)
+            embed.set_author(name=display, icon_url=f"attachment://{avatar_fn}")
+            send_kw_fb["file"] = avatar_file
+        else:
+            embed.set_author(name=display)
+
+        if view:
+            send_kw_fb["view"] = view
+        if content:
+            send_kw_fb["content"] = content
+
+        return await channel.send(**send_kw_fb)
 
     # 改善1・6・7: カテゴリ整理 + 動的チャンネル自動作成 (保管庫統合版)
     async def _ensure_server_structure(self) -> None:
@@ -1958,6 +2531,13 @@ class CommanderBridgeBot(discord.Client):
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+        # Phase 4: 朝ブリーフィングタスク停止
+        if self._morning_task and not self._morning_task.done():
+            self._morning_task.cancel()
+            try:
+                await self._morning_task
+            except asyncio.CancelledError:
+                pass
         # Phase 3: StateWatcher 停止
         if self._state_watcher is not None:
             await self._state_watcher.stop()
@@ -2021,6 +2601,20 @@ class CommanderBridgeBot(discord.Client):
                 self._last_heartbeat = time.monotonic()
                 self._write_health_file()
 
+                # Phase 4: 動的ステータスローテーション
+                try:
+                    status_msg = _STATUS_MESSAGES[self._status_idx % len(_STATUS_MESSAGES)]
+                    self._status_idx += 1
+                    await self.change_presence(
+                        status=discord.Status.online,
+                        activity=discord.Activity(
+                            type=discord.ActivityType.watching,
+                            name=status_msg,
+                        ),
+                    )
+                except Exception:
+                    pass  # ステータス更新失敗は無視
+
             except asyncio.CancelledError:
                 log.info("伝書鳩: ハートビートループ停止。")
                 break
@@ -2059,9 +2653,26 @@ class CommanderBridgeBot(discord.Client):
         # Bot からのメッセージも基本無視 (Embed は転送しない)
         if message.author.bot:
             return
+        # 重複排除: 同一メッセージIDを2回処理しない（Gatewayの再送信対策）
+        if message.id in _PROCESSED_MSG_IDS:
+            log.debug("重複メッセージをスキップ: %s", message.id)
+            return
+        _PROCESSED_MSG_IDS.add(message.id)
+        if len(_PROCESSED_MSG_IDS) > _PROCESSED_MSG_MAX:
+            # 古いIDを適当に間引く（setなので順序保証なし、最古ではないが十分）
+            to_remove = len(_PROCESSED_MSG_IDS) - _PROCESSED_MSG_MAX
+            it = iter(_PROCESSED_MSG_IDS)
+            for _ in range(to_remove):
+                _PROCESSED_MSG_IDS.discard(next(it))
 
         channel_id = message.channel.id
-        channel_name = CHANNEL_TO_DEPT.get(channel_id, "")
+
+        # Phase 4: スレッド内メッセージは親チャンネルの部門として処理
+        actual_channel_id = channel_id
+        if isinstance(message.channel, discord.Thread) and message.channel.parent_id:
+            actual_channel_id = message.channel.parent_id
+
+        channel_name = CHANNEL_TO_DEPT.get(actual_channel_id, "")
 
         content = (message.content or "").strip()
 
@@ -2091,12 +2702,16 @@ class CommanderBridgeBot(discord.Client):
             attachment_metadata: dict[str, Any] = {}
             attachment_summary = ""
             if message.attachments:
-                attachment_metadata = await _process_attachments(message.attachments)
-                attachment_summary = _format_attachment_summary(attachment_metadata)
-                log.debug(
-                    "添付ファイル処理: %s から %d 件 (channel=%s)",
-                    author_name, len(message.attachments), channel_name,
-                )
+                try:
+                    attachment_metadata = await _process_attachments(message.attachments)
+                    attachment_summary = _format_attachment_summary(attachment_metadata)
+                    log.debug(
+                        "添付ファイル処理: %s から %d 件 (channel=%s)",
+                        author_name, len(message.attachments), channel_name,
+                    )
+                except Exception as att_exc:
+                    log.error("添付ファイル処理エラー (メッセージ転送は続行): %s", att_exc)
+                    attachment_summary = f"[添付ファイル処理エラー: {len(message.attachments)}件]"
 
             # テキストメッセージの組み立て
             forward_parts = [f"[Discord/{channel_name}] {author_name}: {content}"]
@@ -2135,6 +2750,249 @@ class CommanderBridgeBot(discord.Client):
                     ),
                     name=f"ai_reply_{dept_id}",
                 )
+
+    # ------------------------------------------------------------------
+    # Phase 4: リアクション→アクション
+    # ------------------------------------------------------------------
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        """絵文字リアクションでアクションを実行する。
+        ⭐ = memory_bridgeに保存
+        ➡️ = 司令塔に転送
+        📝 = アクションアイテムとして記録
+        """
+        # Bot自身のリアクションは無視
+        if payload.user_id == self.user.id:  # type: ignore[union-attr]
+            return
+        # ギルド内のみ
+        if not payload.guild_id or not self._guild:
+            return
+
+        emoji = str(payload.emoji)
+        if emoji not in ("⭐", "➡️", "📝"):
+            return
+
+        channel = self._guild.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except discord.HTTPException:
+            return
+
+        # Bot自身のメッセージ（AI返答）のみ対象
+        if message.author != self.user:  # type: ignore[union-attr]
+            return
+
+        # 部門IDを特定
+        channel_name = CHANNEL_TO_DEPT.get(channel.id, "")
+        dept_id = CHANNEL_TO_DEPT_ID.get(channel_name, "commander")
+
+        # embedのdescriptionからAI返答テキストを取得
+        response_text = ""
+        if message.embeds:
+            response_text = message.embeds[0].description or ""
+
+        if emoji == "⭐":
+            # memory_bridgeに保存
+            if self._memory_bridge and response_text:
+                try:
+                    await self._memory_bridge.save_conversation(
+                        dept_id=dept_id,
+                        user_msg="(リアクションで保存)",
+                        ai_response=response_text,
+                    )
+                    await message.add_reaction("✅")
+                    log.info("リアクション保存: %s (channel=%s)", dept_id, channel_name)
+                except Exception as exc:
+                    log.error("リアクション保存エラー: %s", exc)
+
+        elif emoji == "➡️":
+            # 司令塔チャンネルに転送
+            cmd_ch_id = CHANNELS.get("司令塔")
+            if cmd_ch_id:
+                cmd_ch = self._guild.get_channel(cmd_ch_id)
+                if isinstance(cmd_ch, discord.TextChannel) and response_text:
+                    char = CHAR_BY_DEPT.get(dept_id, CHAR_BY_DEPT.get("bridge"))
+                    fwd_embed = discord.Embed(
+                        title=f"転送: {channel_name}",
+                        description=response_text[:4000],
+                        color=char["discord_color"] if char else 0x95A5A6,
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                    fwd_embed.set_footer(text=f"リアクション転送 | 元チャンネル: {channel_name}")
+                    try:
+                        await cmd_ch.send(embed=fwd_embed)
+                        await message.add_reaction("✅")
+                    except discord.HTTPException as exc:
+                        log.error("リアクション転送エラー: %s", exc)
+
+        elif emoji == "📝":
+            # アクションアイテムとして司令塔ログに記録
+            log_ch_id = CHANNELS.get("司令塔ログ")
+            if log_ch_id:
+                log_ch = self._guild.get_channel(log_ch_id)
+                if isinstance(log_ch, discord.TextChannel) and response_text:
+                    action_embed = discord.Embed(
+                        title="📝 アクションアイテム",
+                        description=response_text[:2000],
+                        color=0xF39C12,
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                    action_embed.add_field(name="元チャンネル", value=channel_name, inline=True)
+                    action_embed.add_field(
+                        name="元メッセージ",
+                        value=f"[ジャンプ]({message.jump_url})",
+                        inline=True,
+                    )
+                    action_embed.set_footer(text="リアクション → アクションアイテム")
+                    try:
+                        await log_ch.send(embed=action_embed)
+                        await message.add_reaction("✅")
+                    except discord.HTTPException as exc:
+                        log.error("アクションアイテム記録エラー: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 4: ウェルカムメッセージ
+    # ------------------------------------------------------------------
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        """新メンバー参加時のウェルカムメッセージ。"""
+        if member.bot:
+            return
+
+        # 一般チャンネルに送信
+        general_ch_id = CHANNELS.get("一般")
+        if not general_ch_id or not self._guild:
+            return
+        channel = self._guild.get_channel(general_ch_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        embed = discord.Embed(
+            title=f"ようこそ、{member.display_name}さん！",
+            description=(
+                "**ミスターDオフィス**へようこそ！\n\n"
+                "このサーバーは15部門のAIエージェントが常駐する自律オフィスです。\n"
+                "各部門チャンネルでメッセージを送ると、担当AIが返答します。\n\n"
+                "**使い方:**\n"
+                "• 各部門チャンネルで自由に質問・相談\n"
+                "• `ヘルプ` と送信でコマンド一覧\n"
+                "• `部門一覧` で全キャラクター確認\n"
+                "• ⭐リアクションで会話を保存\n"
+                "• AI返答のボタンで深掘り・転送・保存\n\n"
+                "まずは気になる部門チャンネルを覗いてみてください！"
+            ),
+            color=0xD4AF37,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        try:
+            await self._send_as_dept(
+                channel=channel,
+                dept_id="commander",
+                embed=embed,
+                author_name="フィル（司令塔）",
+            )
+            log.info("ウェルカムメッセージ送信: %s", member.display_name)
+        except discord.HTTPException as exc:
+            log.error("ウェルカムメッセージ送信エラー: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 4: 朝ブリーフィングループ
+    # ------------------------------------------------------------------
+
+    async def _morning_briefing_loop(self) -> None:
+        """毎朝 MORNING_BRIEFING_HOUR 時 (JST) に司令塔チャンネルへブリーフィングを投稿する。"""
+        while not self._shutdown_requested:
+            try:
+                now_jst = datetime.now(JST)
+                target = now_jst.replace(
+                    hour=MORNING_BRIEFING_HOUR, minute=0, second=0, microsecond=0,
+                )
+                if now_jst >= target:
+                    target += timedelta(days=1)
+
+                wait_sec = (target - now_jst).total_seconds()
+                log.info(
+                    "次の朝ブリーフィング: %s JST (%.0f秒後)",
+                    target.strftime("%Y-%m-%d %H:%M"), wait_sec,
+                )
+                await asyncio.sleep(wait_sec)
+
+                if self._shutdown_requested:
+                    break
+
+                # ブリーフィング生成
+                await self._post_morning_briefing()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.exception("朝ブリーフィングエラー: %s", exc)
+                await asyncio.sleep(60)
+
+    async def _post_morning_briefing(self) -> None:
+        """朝ブリーフィングを司令塔チャンネルに投稿する。"""
+        if not self._guild:
+            return
+
+        cmd_ch_id = CHANNELS.get("司令塔")
+        if not cmd_ch_id:
+            return
+        channel = self._guild.get_channel(cmd_ch_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        now_jst = datetime.now(JST)
+        date_str = now_jst.strftime("%Y年%m月%d日 (%a)")
+
+        # 各部門の稼働状況を収集
+        dept_lines = []
+        for char in CHARACTERS:
+            dept_id = char["dept_id"]
+            icon = char["icon"]
+            name = char["display_name"].split(" ", 1)[-1] if " " in char["display_name"] else char["display_name"]
+            msg_count = _msg_counter.get(dept_id, 0)
+            status = f"{msg_count}件の応答" if msg_count > 0 else "待機中"
+            dept_lines.append(f"{icon} **{name}** — {status}")
+
+        # コスト情報
+        cost_info = ""
+        if self._dept_brain:
+            cost_info = f"**月間APIコスト**: ${self._dept_brain.monthly_cost:.2f} / ${MONTHLY_API_COST_LIMIT:.0f}"
+
+        # uptime
+        uptime_sec = time.monotonic() - self._started_at
+        uptime_hours = uptime_sec / 3600
+
+        embed = discord.Embed(
+            title=f"おはようございます — {date_str}",
+            description=(
+                f"**ミスターDオフィス 朝ブリーフィング**\n\n"
+                f"Bot稼働時間: {uptime_hours:.1f}時間\n"
+                f"{cost_info}\n"
+                f"昨日のメッセージ数: {sum(_msg_counter.values())}件\n\n"
+                f"**部門ステータス:**\n" + "\n".join(dept_lines)
+            ),
+            color=0xD4AF37,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.set_footer(text="ミスターDオフィス 自動ブリーフィング")
+
+        try:
+            await self._send_as_dept(
+                channel=channel,
+                dept_id="commander",
+                embed=embed,
+                author_name="フィル（司令塔） 朝ブリーフィング",
+            )
+            log.info("朝ブリーフィング投稿完了: %s", date_str)
+            # カウンターリセット（新しい日の開始）
+            _msg_counter.clear()
+        except discord.HTTPException as exc:
+            log.error("朝ブリーフィング投稿エラー: %s", exc)
 
     # ------------------------------------------------------------------
     # テキストコマンド実装
@@ -2245,12 +3103,40 @@ def _build_help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="スラッシュコマンド",
+        name="スラッシュコマンド（基本）",
         value=(
             "`/status` — システムステータス\n"
             "`/ask [部門] [質問]` — 指定部門に質問\n"
             "`/bridge [メッセージ]` — Canvas に直接ブリッジ送信\n"
-            "`/relay_panel` — 14部門中継パネル表示"
+            "`/relay_panel` — 14部門中継パネル表示\n"
+            "`/usage` — APIコスト・メッセージ統計\n"
+            "`/export [部門]` — 会話履歴をエクスポート"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="スラッシュコマンド（管理）",
+        value=(
+            "`/meeting [議題]` — 部門横断会議を開始\n"
+            "`/run [部門] [タスク]` — AI にタスク実行させる\n"
+            "`/approve [ID]` — 承認待ちタスクを承認\n"
+            "`/pending` — 承認待ち一覧\n"
+            "`/silence [on/off]` — 自発活動の停止/再開\n"
+            "`/brain_status` — 部門AI頭脳のステータス"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="インタラクティブ機能",
+        value=(
+            "**ボタン**: AI返答に付く3ボタン\n"
+            "  - 🔍 深掘りする → スレッド作成\n"
+            "  - ➡️ 別部門に転送 → 部門選択メニュー\n"
+            "  - ⭐ 保存する → メモリに保存\n\n"
+            "**リアクション**: AI返答に絵文字でアクション\n"
+            "  - ⭐ → メモリに保存\n"
+            "  - ➡️ → 司令塔に転送\n"
+            "  - 📝 → アクションアイテム記録"
         ),
         inline=False,
     )
@@ -2258,8 +3144,13 @@ def _build_help_embed() -> discord.Embed:
         name="自動機能",
         value=(
             f"- 部門チャンネルのメッセージ → Canvas 自動転送\n"
+            f"- スレッド内メッセージもAIが返答\n"
             f"- 添付ファイル対応 (画像/PDF/MD/txt/動画)\n"
             f"- {HEARTBEAT_INTERVAL // 60}分ごとに Canvas ハートビート送信\n"
+            f"- 毎朝 {MORNING_BRIEFING_HOUR}:00 に朝ブリーフィング\n"
+            f"- 部門アバター付きEmbed表示\n"
+            f"- 新メンバーにウェルカムメッセージ\n"
+            f"- APIコスト上限 (日: ${DAILY_API_COST_LIMIT:.0f} / 月: ${MONTHLY_API_COST_LIMIT:.0f})\n"
             f"- 保管庫チャンネル自動管理"
         ),
         inline=False,
@@ -2434,6 +3325,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
     )
     async def slash_relay_panel(interaction: discord.Interaction) -> None:
         """14部門中継パネルを表示する。ボタンを押すとモーダルが開く。"""
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         embed = discord.Embed(
             title="14部門 中継パネル",
             description=(
@@ -2461,6 +3355,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         interaction: discord.Interaction,
         topic: str,
     ) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         if not bot._meeting_engine:
             await interaction.response.send_message(
                 "会議機能が初期化されていません。ANTHROPIC_API_KEYを確認してください。",
@@ -2495,6 +3392,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         interaction: discord.Interaction,
         mode: str,
     ) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         if not bot._dept_brain:
             await interaction.response.send_message(
                 "自律機能が初期化されていません。",
@@ -2520,6 +3420,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         interaction: discord.Interaction,
         text: str,
     ) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         if not hasattr(bot, '_daily_report') or not bot._daily_report:
             await interaction.response.send_message(
                 "日報機能が初期化されていません。",
@@ -2543,6 +3446,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         guild=guild_obj,
     )
     async def slash_phil_nippo(interaction: discord.Interaction) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         if not hasattr(bot, '_daily_report') or not bot._daily_report:
             await interaction.response.send_message(
                 "日報機能が初期化されていません。",
@@ -2991,6 +3897,219 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
         await interaction.response.send_message(embed=embed)
 
     # ===================================================================
+    # Phase 4: /usage — APIコスト・メッセージ統計
+    # ===================================================================
+
+    @tree.command(
+        name="usage",
+        description="APIコスト・メッセージ数・部門別利用統計を表示",
+        guild=guild_obj,
+    )
+    async def slash_usage(interaction: discord.Interaction) -> None:
+        now_jst = datetime.now(JST)
+        date_str = now_jst.strftime("%Y-%m-%d")
+
+        embed = discord.Embed(
+            title="利用統計",
+            description=f"**日付**: {date_str}",
+            color=0x3498DB,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        # APIコスト
+        if bot._dept_brain:
+            embed.add_field(
+                name="月間APIコスト",
+                value=f"${bot._dept_brain.monthly_cost:.2f} / ${MONTHLY_API_COST_LIMIT:.0f}",
+                inline=True,
+            )
+        embed.add_field(
+            name="日次コスト上限",
+            value=f"${DAILY_API_COST_LIMIT:.0f}",
+            inline=True,
+        )
+
+        # uptime
+        uptime_sec = time.monotonic() - bot._started_at
+        uptime_hours = uptime_sec / 3600
+        embed.add_field(
+            name="稼働時間",
+            value=f"{uptime_hours:.1f}時間",
+            inline=True,
+        )
+
+        # メッセージカウンター
+        total_msgs = sum(_msg_counter.values())
+        embed.add_field(
+            name="本日メッセージ数",
+            value=str(total_msgs),
+            inline=True,
+        )
+
+        # 部門別ランキング (上位5)
+        if _msg_counter:
+            sorted_depts = sorted(_msg_counter.items(), key=lambda x: x[1], reverse=True)[:5]
+            ranking_lines = []
+            for i, (dept_id, count) in enumerate(sorted_depts, 1):
+                char = CHAR_BY_DEPT.get(dept_id, {})
+                icon = char.get("icon", "")
+                name = char.get("display_name", dept_id).split(" ", 1)[-1] if " " in char.get("display_name", "") else dept_id
+                ranking_lines.append(f"{i}. {icon} {name}: {count}件")
+            embed.add_field(
+                name="部門別ランキング (Top 5)",
+                value="\n".join(ranking_lines) if ranking_lines else "データなし",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="部門別ランキング",
+                value="本日のメッセージはまだありません",
+                inline=False,
+            )
+
+        # 指示実行エンジン
+        if bot._instruction_engine:
+            status = bot._instruction_engine.get_status()
+            embed.add_field(
+                name="実行済みタスク",
+                value=str(status.get("execution_count", 0)),
+                inline=True,
+            )
+            embed.add_field(
+                name="承認待ち",
+                value=str(status.get("pending_approvals", 0)),
+                inline=True,
+            )
+
+        embed.set_footer(text="ミスターDオフィス × 利用統計")
+        await interaction.response.send_message(embed=embed)
+
+    # ===================================================================
+    # Phase 4: /export — 会話履歴エクスポート
+    # ===================================================================
+
+    @tree.command(
+        name="export",
+        description="部門の会話履歴をMD形式でエクスポートする",
+        guild=guild_obj,
+    )
+    @app_commands.describe(
+        dept="部門ID（例: research）。省略時は現在のチャンネルの部門",
+        count="エクスポートするメッセージ数（デフォルト50）",
+    )
+    async def slash_export(
+        interaction: discord.Interaction,
+        dept: str | None = None,
+        count: int = 50,
+    ) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        # 部門IDの特定
+        dept_id = None
+        if dept:
+            dept_clean = dept.strip().lower()
+            if dept_clean in CHAR_BY_DEPT:
+                dept_id = dept_clean
+            else:
+                # チャンネル名から推定
+                for d, ch in RELAY_DEPT_TO_CHANNEL.items():
+                    if dept in ch:
+                        dept_id = d
+                        break
+        if not dept_id:
+            ch_name = CHANNEL_TO_DEPT.get(interaction.channel_id, "")
+            dept_id = CHANNEL_TO_DEPT_ID.get(ch_name)
+
+        if not dept_id:
+            await interaction.followup.send(
+                "部門を特定できません。`/export dept:research` のように指定してください。",
+                ephemeral=True,
+            )
+            return
+
+        char = CHAR_BY_DEPT.get(dept_id, {})
+        char_name = char.get("display_name", dept_id)
+
+        # チャンネルからメッセージを取得
+        ch_name = RELAY_DEPT_TO_CHANNEL.get(dept_id)
+        if not ch_name or not bot._guild:
+            await interaction.followup.send("チャンネルが見つかりません。", ephemeral=True)
+            return
+
+        ch_id = CHANNELS.get(ch_name)
+        if not ch_id:
+            await interaction.followup.send("チャンネルIDが見つかりません。", ephemeral=True)
+            return
+
+        channel = bot._guild.get_channel(ch_id)
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.followup.send("テキストチャンネルではありません。", ephemeral=True)
+            return
+
+        # メッセージ収集
+        messages_data = []
+        async for msg in channel.history(limit=min(count, 200)):
+            ts = msg.created_at.astimezone(JST).strftime("%Y-%m-%d %H:%M:%S")
+            author = msg.author.display_name
+            content = msg.content or ""
+
+            # Embedの内容も取得
+            embed_text = ""
+            if msg.embeds:
+                for emb in msg.embeds:
+                    if emb.description:
+                        embed_text += emb.description + "\n"
+
+            messages_data.append({
+                "timestamp": ts,
+                "author": author,
+                "content": content,
+                "embed": embed_text.strip(),
+            })
+
+        messages_data.reverse()  # 古い順に
+
+        # Markdown生成
+        now_str = datetime.now(JST).strftime("%Y%m%d_%H%M")
+        md_lines = [
+            f"# {char_name} 会話履歴エクスポート",
+            f"",
+            f"> 生成日時: {datetime.now(JST).strftime('%Y-%m-%d %H:%M JST')}",
+            f"> 部門: {char_name} (`{dept_id}`)",
+            f"> メッセージ数: {len(messages_data)}件",
+            f"",
+            "---",
+            "",
+        ]
+
+        for msg_data in messages_data:
+            md_lines.append(f"## [{msg_data['timestamp']}] {msg_data['author']}")
+            if msg_data["content"]:
+                md_lines.append(f"{msg_data['content']}")
+            if msg_data["embed"]:
+                md_lines.append(f"\n> {msg_data['embed'][:500]}")
+            md_lines.append("")
+            md_lines.append("---")
+            md_lines.append("")
+
+        md_content = "\n".join(md_lines)
+
+        # ファイルとして送信
+        import io
+        file_bytes = md_content.encode("utf-8")
+        filename = f"export_{dept_id}_{now_str}.md"
+        discord_file = discord.File(io.BytesIO(file_bytes), filename=filename)
+
+        await interaction.followup.send(
+            f"{char_name} の会話履歴 ({len(messages_data)}件) をエクスポートしました。",
+            file=discord_file,
+        )
+
+    # ===================================================================
     # Phase 3: P-15 dept_lock連携 — /lock, /unlock, /locks
     # ===================================================================
 
@@ -3010,35 +4129,45 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
 
         try:
             import json as _json
-            data = _json.loads(lock_file.read_text(encoding="utf-8"))
-            depts = data.get("departments", {})
+            import fcntl as _fcntl
 
-            if dept_clean not in depts:
-                await interaction.response.send_message(
-                    f"部門 `{dept_clean}` は存在しません。\n有効な部門: {', '.join(sorted(depts.keys()))}",
-                    ephemeral=True,
-                )
-                return
+            # flock排他制御で読み→変更→書き込みをアトミックに行う
+            with open(lock_file, "r+", encoding="utf-8") as fp:
+                _fcntl.flock(fp, _fcntl.LOCK_EX)
+                try:
+                    data = _json.load(fp)
+                    depts = data.get("departments", {})
 
-            dept_data = depts[dept_clean]
-            existing_lock = dept_data.get("discord_lock")
-            if existing_lock:
-                await interaction.response.send_message(
-                    f"⚠️ `{dept_clean}` は既にロック中です。\n"
-                    f"**ロック者**: {existing_lock.get('holder', '不明')}\n"
-                    f"**開始時刻**: {existing_lock.get('locked_at', '不明')}",
-                    ephemeral=True,
-                )
-                return
+                    if dept_clean not in depts:
+                        await interaction.response.send_message(
+                            f"部門 `{dept_clean}` は存在しません。\n有効な部門: {', '.join(sorted(depts.keys()))}",
+                            ephemeral=True,
+                        )
+                        return
 
-            jst = timezone(timedelta(hours=9))
-            now_str = datetime.now(jst).isoformat()
-            dept_data["discord_lock"] = {
-                "holder": str(interaction.user),
-                "locked_at": now_str,
-                "source": "discord",
-            }
-            lock_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    dept_data = depts[dept_clean]
+                    existing_lock = dept_data.get("discord_lock")
+                    if existing_lock:
+                        await interaction.response.send_message(
+                            f"⚠️ `{dept_clean}` は既にロック中です。\n"
+                            f"**ロック者**: {existing_lock.get('holder', '不明')}\n"
+                            f"**開始時刻**: {existing_lock.get('locked_at', '不明')}",
+                            ephemeral=True,
+                        )
+                        return
+
+                    jst = timezone(timedelta(hours=9))
+                    now_str = datetime.now(jst).isoformat()
+                    dept_data["discord_lock"] = {
+                        "holder": str(interaction.user),
+                        "locked_at": now_str,
+                        "source": "discord",
+                    }
+                    fp.seek(0)
+                    fp.truncate()
+                    _json.dump(data, fp, ensure_ascii=False, indent=2)
+                finally:
+                    _fcntl.flock(fp, _fcntl.LOCK_UN)
 
             embed = discord.Embed(
                 title=f"🔒 部門ロック: {dept_clean}",
@@ -3069,20 +4198,30 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
 
         try:
             import json as _json
-            data = _json.loads(lock_file.read_text(encoding="utf-8"))
-            dept_data = data.get("departments", {}).get(dept_clean)
+            import fcntl as _fcntl
 
-            if not dept_data:
-                await interaction.response.send_message(f"部門 `{dept_clean}` が見つかりません", ephemeral=True)
-                return
+            # flock排他制御で読み→変更→書き込みをアトミックに行う
+            with open(lock_file, "r+", encoding="utf-8") as fp:
+                _fcntl.flock(fp, _fcntl.LOCK_EX)
+                try:
+                    data = _json.load(fp)
+                    dept_data = data.get("departments", {}).get(dept_clean)
 
-            existing_lock = dept_data.get("discord_lock")
-            if not existing_lock:
-                await interaction.response.send_message(f"`{dept_clean}` はロックされていません", ephemeral=True)
-                return
+                    if not dept_data:
+                        await interaction.response.send_message(f"部門 `{dept_clean}` が見つかりません", ephemeral=True)
+                        return
 
-            dept_data.pop("discord_lock", None)
-            lock_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    existing_lock = dept_data.get("discord_lock")
+                    if not existing_lock:
+                        await interaction.response.send_message(f"`{dept_clean}` はロックされていません", ephemeral=True)
+                        return
+
+                    dept_data.pop("discord_lock", None)
+                    fp.seek(0)
+                    fp.truncate()
+                    _json.dump(data, fp, ensure_ascii=False, indent=2)
+                finally:
+                    _fcntl.flock(fp, _fcntl.LOCK_UN)
 
             embed = discord.Embed(
                 title=f"🔓 ロック解除: {dept_clean}",
@@ -3144,6 +4283,9 @@ def _register_slash_commands(bot: CommanderBridgeBot) -> None:
     @tree.command(name="rollback", description="最後の実行結果を取り消す（git revert）")
     @app_commands.describe(inst_id="取り消す指示ID (INST-xxxxx)")
     async def slash_rollback(interaction: discord.Interaction, inst_id: str) -> None:
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("このコマンドはどら（CEO）専用です。", ephemeral=True)
+            return
         if not bot._instruction_engine:
             await interaction.response.send_message("指示実行エンジンが無効です", ephemeral=True)
             return
@@ -3424,6 +4566,8 @@ async def _run_and_report(
                     log.warning("ファイルアップロード準備エラー %s: %s", fpath, fe)
 
             if upload_files:
+                # ファイルパスを事前に保持（discord.File は send() 後に消費される）
+                _file_paths = [(str(Path(f.fp.name).resolve()), f.filename) for f in upload_files if f.fp]
                 try:
                     await channel.send(
                         f"`{inst_id}` 成果物ファイル ({len(upload_files)}件):",
@@ -3441,13 +4585,14 @@ async def _run_and_report(
                                 bot._guild.text_channels, name=cname,
                             )
                             if deliv_ch and deliv_ch != channel:
-                                # Fileは1度sendすると消費されるので再作成
+                                # 保持したパスから新しい File オブジェクトを作成
                                 reupload = []
-                                for f in upload_files:
+                                for fpath_str, fname in _file_paths:
                                     try:
-                                        reupload.append(
-                                            discord.File(f.fp.name, filename=f.filename)  # type: ignore[union-attr]
-                                        )
+                                        if Path(fpath_str).is_file():
+                                            reupload.append(
+                                                discord.File(fpath_str, filename=fname)
+                                            )
                                     except Exception:
                                         pass
                                 if reupload:
@@ -3503,8 +4648,55 @@ async def _run_and_report(
 # エントリポイント
 # ---------------------------------------------------------------------------
 
+def _acquire_pid_lock() -> bool:
+    """PIDファイルロックを取得する。既に別プロセスが起動中なら False を返す。"""
+    if _PID_FILE.exists():
+        try:
+            old_pid = int(_PID_FILE.read_text().strip())
+            # プロセスが生きているかチェック (signal 0 = 生存確認)
+            os.kill(old_pid, 0)
+            # 生きている → 二重起動
+            log.error(
+                "伝書鳩は既に起動中です (PID %d)。二重起動はAPIコスト倍増の原因になるため拒否します。\n"
+                "強制起動: rm %s && python3 scripts/discord_bot.py",
+                old_pid, _PID_FILE,
+            )
+            return False
+        except (ProcessLookupError, PermissionError):
+            # プロセスは死んでいる → PIDファイルが残骸。上書きOK
+            log.info("古いPIDファイル検出 (PID %s は既に終了)。上書きします。", old_pid)
+        except ValueError:
+            # PIDファイルの中身が壊れている
+            log.warning("PIDファイルの内容が不正。上書きします。")
+
+    _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    log.info("PIDファイル作成: %s (PID %d)", _PID_FILE, os.getpid())
+    return True
+
+
+def _release_pid_lock() -> None:
+    """PIDファイルロックを解放する。"""
+    try:
+        if _PID_FILE.exists():
+            stored_pid = int(_PID_FILE.read_text().strip())
+            if stored_pid == os.getpid():
+                _PID_FILE.unlink()
+                log.info("PIDファイル削除: %s", _PID_FILE)
+            else:
+                log.warning(
+                    "PIDファイルのPID (%d) が自分 (%d) と異なる。削除スキップ。",
+                    stored_pid, os.getpid(),
+                )
+    except (ValueError, OSError) as exc:
+        log.warning("PIDファイル削除エラー: %s", exc)
+
+
 async def _main() -> None:
     global _bot
+
+    # --- 二重起動防止 (商品化必須) ---
+    if not _acquire_pid_lock():
+        sys.exit(1)
 
     if not BOT_TOKEN:
         log.error(
@@ -3512,10 +4704,19 @@ async def _main() -> None:
             "ファイルパス: %s",
             _ENV_FILE,
         )
+        _release_pid_lock()
         sys.exit(1)
 
     if not HMAC_SECRET:
         log.error("EXTERNAL_EVENT_SECRET が設定されていません。")
+        _release_pid_lock()
+        sys.exit(1)
+
+    if not GUILD_ID:
+        log.error(
+            "DISCORD_SERVER_ID (または DISCORD_GUILD_ID) が設定されていません。.env を確認してください。"
+        )
+        _release_pid_lock()
         sys.exit(1)
 
     log.info("=" * 60)
@@ -3566,6 +4767,8 @@ async def _main() -> None:
             await _bot.close()
         # セッションが残っていたら cleanup
         await _close_aiohttp_session()
+        # PIDファイル解放
+        _release_pid_lock()
 
 
 if __name__ == "__main__":
@@ -3573,3 +4776,4 @@ if __name__ == "__main__":
         asyncio.run(_main())
     except KeyboardInterrupt:
         log.info("伝書鳩: Keyboard interrupt. Bye.")
+        _release_pid_lock()
